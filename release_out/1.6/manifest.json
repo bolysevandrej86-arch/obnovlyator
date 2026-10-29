@@ -1,0 +1,14 @@
+{
+  "app_name": "Обновлятор",
+  "version": "1.6",
+  "channel": "stable",
+  "file": "Obnovlyator.exe",
+  "sha256": "aae06e1a91e29db76c63718477e913a6b199d5444ae818906fefecdb5480da4d",
+  "size": 32540867,
+  "url": "https://github.com/bolysevandrej86-arch/obnovlyator/releases/download/v1.6/Obnovlyator.exe",
+  "published_at": "2026-10-29T22:30:29+0500",
+  "notes": "Первая публичная версия: автообновление winget/pip/npm, VPN-категории, очистка, диагностика системы, самообновление.",
+  "critical": false,
+  "min_supported": "",
+  "signature": "4a4ed31200fda83ec0f05bcd7cf9bcda824d719c107d3403f18b8e014d841e83dffa5e3e6f06efbbe910466b5e4ab857412a4237ecb914c406fad8e247cbb900"
+}

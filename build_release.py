@@ -122,6 +122,7 @@ def run_pyinstaller(version: str, icon: str) -> Path:
         # срабатываний антивирусов и ломает верификацию подписи Windows.
         "--collect-all", "customtkinter", "--collect-all", "darkdetect",
         "--collect-all", "pystray", "--collect-all", "winotify",
+        "--collect-all", "nacl",
         str(HERE / "main.py"),
     ]
     print("[сборка]", " ".join(cmd))

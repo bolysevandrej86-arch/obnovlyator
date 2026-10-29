@@ -7,6 +7,7 @@ python -m PyInstaller --noconfirm --onefile --windowed --name Obnovlyator ^
   --icon app.ico ^
   --collect-all customtkinter --collect-all darkdetect ^
   --collect-all pystray --collect-all winotify ^
+  --collect-all nacl ^
   main.py
 if errorlevel 1 (
   echo BUILD FAILED
