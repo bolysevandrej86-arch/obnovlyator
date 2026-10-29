@@ -583,6 +583,12 @@ class SettingsWindow(ctk.CTkToplevel):
         self.e_selfupd_hours = self._row(
             scroll, "Фоновая проверка каждые N часов (0 — только вручную)",
             str(self.cfg.selfupdate_check_hours))
+        ctk.CTkButton(scroll, text="🔄  Проверить обновления Обновлятора сейчас",
+                      height=34, command=self._manual_selfupdate_check).pack(
+            fill="x", pady=(6, 0))
+        ctk.CTkLabel(scroll, text=f"Текущая версия: {APP_VERSION}", anchor="w",
+                     font=ctk.CTkFont(size=10), text_color=MUTED).pack(
+            anchor="w", pady=(4, 0))
         # Подсказка о текущем состоянии подключения репозитория:
         if selfupdate.SelfUpdater("", repo=selfupdate.SELFUPDATE_REPO,
                                   public_key=selfupdate.SELFUPDATE_PUBLIC_KEY).configured:
@@ -2274,6 +2280,18 @@ class App(ctk.CTk):
                     "Обновлятор: у вас последняя версия", "ok"))
 
         threading.Thread(target=work, daemon=True, name="selfupdate-check").start()
+
+    def _manual_selfupdate_check(self) -> None:
+        """Ручная проверка обновлений самого Обновлятора с честной обратной
+        связью: диалог при находке, понятный итог — если обновлений нет."""
+        if getattr(self, "_settings_win", None) is not None:
+            try:
+                self._settings_win.grab_release()
+                self._settings_win.destroy()
+            except Exception:
+                pass
+            self._settings_win = None
+        self._selfupdate_check(manual=True)
 
     def _selfupdate_show_dialog(self, info) -> None:
         if self._closing:
