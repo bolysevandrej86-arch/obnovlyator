@@ -109,13 +109,17 @@ VSVersionInfo(
 
 
 def run_pyinstaller(version: str, icon: str) -> Path:
-    for d in (HERE / "dist", HERE / "build"):
+    for d in (HERE / "release_build",):
         shutil.rmtree(d, ignore_errors=True)
     vf = HERE / "version_info.txt"
     vf.write_text(make_version_info(version), encoding="utf-8")
+    build_dir = HERE / "release_build"
     cmd = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--onefile", "--windowed", "--clean",
+        "--distpath", str(build_dir / "dist"),
+        "--workpath", str(build_dir / "work"),
+        "--specpath", str(build_dir),
         "--name", APP, "--icon", icon,
         "--version-file", str(vf),
         # UPX НЕ используем специально: упаковка повышает число ложных
@@ -128,7 +132,7 @@ def run_pyinstaller(version: str, icon: str) -> Path:
     print("[сборка]", " ".join(cmd))
     if subprocess.run(cmd, cwd=str(HERE)).returncode != 0:
         sys.exit("PyInstaller завершился с ошибкой")
-    exe = HERE / "dist" / f"{APP}.exe"
+    exe = build_dir / "dist" / f"{APP}.exe"
     if not exe.exists():
         sys.exit(f"Не найден результат сборки: {exe}")
     return exe

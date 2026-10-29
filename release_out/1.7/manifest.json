@@ -1,0 +1,14 @@
+{
+  "app_name": "Обновлятор",
+  "version": "1.7",
+  "channel": "stable",
+  "file": "Obnovlyator.exe",
+  "sha256": "4de4fba79a507218aa2791a21bef83dc77aafd0a76941741fef23300574f03e7",
+  "size": 34368728,
+  "url": "https://github.com/bolysevandrej86-arch/obnovlyator/releases/download/v1.7/Obnovlyator.exe",
+  "published_at": "2026-10-30T00:28:01+0500",
+  "notes": "Менеджер автозагрузки (обратимое отключение), ночной режим автообновлений, логи установки пакетов, уборка _MEI-папок Temp, кнопка «Навести порядок», экспорт журнала, чёткий рендер и сглаженный график.",
+  "critical": false,
+  "min_supported": "",
+  "signature": "af47e83fd26d0044faabdf2eb9b0c8a913619cead81bd9c830267e8dea479b468d38ec4af67cb83d7b46b1255a77df90efd6754f06c76d21dc8158034c68d802"
+}
