@@ -1595,9 +1595,11 @@ class App(ctk.CTk):
             ("devices", "Драйверы: проблемные устройства",
              "Ищет устройства с ошибками (как в диспетчере устройств). Быстро.",
              [("▶  Проверить", lambda: self._run_check("devices", 1.0))]),
-            ("drivers", "Драйверы: обновления",
-             "Опрашивает Windows Update о новых драйверах. Долго: 1–5 минут.",
-             [("▶  Искать", lambda: self._run_check("drivers", 1.0))]),
+            ("drivers", "Драйверы: обновления и установка",
+             "Опрашивает Windows Update о новых драйверах (1–5 минут) и "
+             "умеет устанавливать найденное (10–40 минут, от администратора).",
+             [("▶  Искать", lambda: self._run_check("drivers", 1.0)),
+              ("⬇  Установить", lambda: self._run_check("drivers_install", 1.0))]),
             ("disks", "Диски: SMART и место",
              "Статус здоровья физических дисков и свободное место на томах. "
              "Быстро.",
@@ -1609,6 +1611,12 @@ class App(ctk.CTk):
              "SFC /verifyonly — только доклад, ничего не чинит. "
              "Долго: 5–15 минут. " + admin_note + ".",
              [("▶  Запустить SFC", lambda: self._run_check("sfc", 1.0))]),
+            ("restore", "Восстановление системы",
+             "Точка состояния Windows на случай сбоя. Создание точки — "
+             "мгновенно; откат — через штатный мастер.",
+             [("✚  Создать точку", lambda: self._run_check("restore_create", 1.0)),
+              ("📋  Список точек", lambda: self._run_check("restore_list", 1.0)),
+              ("↩  Восстановить", lambda: self._run_check("restore_ui", 1.0))]),
             ("chkdsk", "Диск: файловая система",
              "chkdsk /scan системного диска — только чтение. Долго: 5–20 "
              "минут. " + admin_note + ".",
@@ -1669,10 +1677,15 @@ class App(ctk.CTk):
             "integrity": lambda: diag_mod.app_integrity(self.cfg),
             "devices": diag_mod.problem_devices,
             "drivers": diag_mod.driver_updates_wu,
+            "drivers_install": lambda: diag_mod.driver_install(
+                is_admin=self.is_admin),
             "disks": diag_mod.disk_health,
             "dism": lambda: diag_mod.dism_checkhealth(self.is_admin),
             "sfc": diag_mod.sfc_verifyonly,
             "chkdsk": diag_mod.chkdsk_scan,
+            "restore_list": diag_mod.restore_points_list,
+            "restore_create": diag_mod.restore_point_create,
+            "restore_ui": diag_mod.restore_open_ui,
         }
         fn = fns.get(key)
         if not fn:
