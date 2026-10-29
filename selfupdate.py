@@ -276,8 +276,8 @@ def verify_manifest(data: dict, repo: str, public_key_hex: str) -> dict:
             VerifyKey(bytes.fromhex(public_key_hex)).verify(
                 canonical_manifest_bytes(data), bytes.fromhex(str(sig)))
         except ImportError as e:
-            raise VerifyError("Манифест подписан, но PyNaCl не установлен "
-                              "(pip install pynacl)") from e
+            raise VerifyError(f"Манифест подписан, но PyNaCl не работает "
+                              f"в этой сборке: {e!r}") from e
         except (BadSignatureError, ValueError) as e:
             raise VerifyError("Подпись манифеста НЕВЕРНА — возможна подмена") from e
     data["sha256"] = sha
@@ -368,6 +368,7 @@ class SelfUpdater:
         releases = _get_json(f"{GH_API}/repos/{self.repo}/releases?per_page=20")
         if not isinstance(releases, list):
             raise NetworkError("Неожиданный ответ GitHub API")
+        net_error = ""                  # последний сбой загрузки манифеста
         for rel in releases:
             if rel.get("draft") or not self._channel_match(rel):
                 continue
@@ -382,8 +383,12 @@ class SelfUpdater:
                 data = verify_manifest(data, self.repo, self.public_key)
             except VerifyError:
                 raise                       # подпись/структура — не глотаем
-            except NetworkError:
-                continue                    # этот релиз не читается — пробуем старее
+            except NetworkError as e:
+                # этот релиз сейчас не читается — пробуем старее, но помним
+                # сбой: если обновлений не найдено, честно сообщим о сети,
+                # а не «обновлений нет»
+                net_error = str(e)
+                continue
             if data.get("channel") != self.channel:
                 continue
             if not version_newer(str(data["version"]), self.current_version):
@@ -414,6 +419,8 @@ class SelfUpdater:
                                  or rel.get("published_at") or ""),
                 release_name=str(rel.get("name") or rel.get("tag_name") or ""),
             )
+        if net_error:
+            raise NetworkError(f"Не удалось скачать манифест релиза: {net_error}")
         return None
 
     def _channel_match(self, rel: dict) -> bool:

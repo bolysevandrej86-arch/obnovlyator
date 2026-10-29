@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.6.1"
+APP_VERSION = "1.6"
 
 
 def _resolve_base_dir() -> Path:

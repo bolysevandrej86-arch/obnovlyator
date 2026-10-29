@@ -3,12 +3,12 @@
   "version": "1.6",
   "channel": "stable",
   "file": "Obnovlyator.exe",
-  "sha256": "aae06e1a91e29db76c63718477e913a6b199d5444ae818906fefecdb5480da4d",
-  "size": 32540867,
+  "sha256": "ceca79f0781b2b8445c80c6ebb36ca47fbd3a0486409ba940b59c2b54d3cd6c0",
+  "size": 34348911,
   "url": "https://github.com/bolysevandrej86-arch/obnovlyator/releases/download/v1.6/Obnovlyator.exe",
-  "published_at": "2026-10-29T22:30:29+0500",
-  "notes": "Первая публичная версия: автообновление winget/pip/npm, VPN-категории, очистка, диагностика системы, самообновление.",
+  "published_at": "2026-10-29T22:41:34+0500",
+  "notes": "Первая публичная версия.",
   "critical": false,
   "min_supported": "",
-  "signature": "4a4ed31200fda83ec0f05bcd7cf9bcda824d719c107d3403f18b8e014d841e83dffa5e3e6f06efbbe910466b5e4ab857412a4237ecb914c406fad8e247cbb900"
+  "signature": "53bc9f9d935eb19deb402b6372051a7626e507c8737ecc8c386338a89155ec99e7734854b3fc31f76008c3e6c8329a05114ed94c67b6265e479cfa553e17ae03"
 }
