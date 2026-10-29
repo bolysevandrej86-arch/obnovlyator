@@ -28,6 +28,7 @@ import bloat as bloat_mod
 import diag as diag_mod
 import history as history_mod
 import selfupdate
+import selfupdate_ui
 import tray as tray_mod
 
 # Цвета задаются парами (для светлой темы, для тёмной) — CTk сам подставляет
