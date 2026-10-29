@@ -584,7 +584,8 @@ class SettingsWindow(ctk.CTkToplevel):
             scroll, "Фоновая проверка каждые N часов (0 — только вручную)",
             str(self.cfg.selfupdate_check_hours))
         ctk.CTkButton(scroll, text="🔄  Проверить обновления Обновлятора сейчас",
-                      height=34, command=self._manual_selfupdate_check).pack(
+                      height=34,
+                      command=lambda: self.app._manual_selfupdate_check()).pack(
             fill="x", pady=(6, 0))
         ctk.CTkLabel(scroll, text=f"Текущая версия: {APP_VERSION}", anchor="w",
                      font=ctk.CTkFont(size=10), text_color=MUTED).pack(
