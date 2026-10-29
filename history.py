@@ -11,7 +11,17 @@ import threading
 import time
 from pathlib import Path
 
-HISTORY_PATH = Path(__file__).resolve().parent / "history.jsonl"
+def _history_path() -> Path:
+    """Рядом с приложением. В собранном .exe __file__ указывает на временную
+    папку распаковки — берём BASE_DIR из core (отложенно: core импортирует
+    этот модуль на старте, прямой импорт дал бы цикл)."""
+    try:
+        from core import BASE_DIR
+        return BASE_DIR / "history.jsonl"
+    except Exception:
+        return Path(__file__).resolve().parent / "history.jsonl"
+
+
 _LOCK = threading.Lock()
 
 
@@ -19,7 +29,7 @@ def append(kind: str, **fields) -> None:
     record = {"ts": time.strftime("%Y-%m-%d %H:%M:%S"), "kind": kind, **fields}
     try:
         with _LOCK:
-            with open(HISTORY_PATH, "a", encoding="utf-8") as f:
+            with open(_history_path(), "a", encoding="utf-8") as f:
                 f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except OSError:
         from core import log
@@ -28,11 +38,11 @@ def append(kind: str, **fields) -> None:
 
 def read(limit: int | None = None) -> list[dict]:
     """Все записи (новые в конце); limit — последние N."""
-    if not HISTORY_PATH.exists():
+    if not _history_path().exists():
         return []
     rows: list[dict] = []
     try:
-        with open(HISTORY_PATH, encoding="utf-8") as f:
+        with open(_history_path(), encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

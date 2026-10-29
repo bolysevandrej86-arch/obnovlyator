@@ -3,12 +3,12 @@
   "version": "1.6",
   "channel": "stable",
   "file": "Obnovlyator.exe",
-  "sha256": "6ea7c3d338d87e9de7798a9eda795b96ea07c75a2b2fdf5b2ce76932a43314c8",
-  "size": 34349010,
+  "sha256": "4792235f7caa99a2ec784c9fd422f196cb31350cd54837d4a225b511ec6484e5",
+  "size": 34356312,
   "url": "https://github.com/bolysevandrej86-arch/obnovlyator/releases/download/v1.6/Obnovlyator.exe",
-  "published_at": "2026-10-29T22:56:22+0500",
+  "published_at": "2026-10-29T23:29:45+0500",
   "notes": "Первая публичная версия.",
   "critical": false,
   "min_supported": "",
-  "signature": "58282fb1f2cf39ceb3b9281782e5715429b463499e2c53b7b62ff6ae616b60ca358f99903e6f695b311139366d5a06f66ef2842e01fe51d372de6a79225ae30e"
+  "signature": "e1da9771e77bc7aa2fda839a20e44e14e74187c24e6e09771d2f88b61463194f1d3d03c15a257db126d549adc37c9008427f4f54bab9f7c8d9a17442b90f4d01"
 }
