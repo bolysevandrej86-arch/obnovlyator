@@ -1,0 +1,13 @@
+__pycache__/
+build/
+dist/
+release_keys/
+logs/
+history.jsonl
+config.json
+config.json.bak
+config.json.broken
+*.exe
+Obnovlyator.spec
+_incoming/
+_recover/
