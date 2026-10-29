@@ -11,3 +11,4 @@ config.json.broken
 Obnovlyator.spec
 _incoming/
 _recover/
+release_out/
