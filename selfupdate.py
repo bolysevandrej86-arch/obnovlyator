@@ -47,7 +47,7 @@ from __future__ import annotations
 # TODO(GITHUB): впишите "owner/repo" своего публичного репозитория, например
 #   SELFUPDATE_REPO = "ivanov/obnovlyator"
 # Пока ПУСТО — самообновление отключено (приложение работает как раньше).
-SELFUPDATE_REPO = ""
+SELFUPDATE_REPO = "bolysevandrej86-arch/obnovlyator"
 
 # Имя exe-ассета на GitHub Releases. Должно совпадать с тем, как файл
 # загружается в релиз (build_release.py делает это автоматически).
