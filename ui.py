@@ -29,6 +29,7 @@ import diag as diag_mod
 import history as history_mod
 import selfupdate
 import selfupdate_ui
+import startup as startup_mod
 import tray as tray_mod
 
 # Цвета задаются парами (для светлой темы, для тёмной) — CTk сам подставляет
@@ -438,6 +439,41 @@ class HistoryChart(ctk.CTkLabel):
 
 
 
+class StartupRow(ctk.CTkFrame):
+    """Карточка записи автозагрузки с кнопкой включения/отключения."""
+
+    def __init__(self, master, entry: dict, app: "App"):
+        super().__init__(master, corner_radius=10, fg_color=CARD_BG)
+        self.entry = entry
+        self.app = app
+        self.grid_columnconfigure(0, weight=1)
+        ctk.CTkLabel(self, text=entry["name"], anchor="w",
+                     font=ctk.CTkFont(size=12, weight="bold")).grid(
+            row=0, column=0, sticky="ew", padx=(12, 6), pady=(10, 0))
+        ctk.CTkLabel(self, text=entry["command"], anchor="w", wraplength=480,
+                     justify="left", font=ctk.CTkFont(size=10),
+                     text_color=MUTED).grid(
+            row=1, column=0, sticky="ew", padx=(12, 6), pady=(0, 10))
+        badges = ctk.CTkFrame(self, fg_color="transparent")
+        badges.grid(row=0, column=1, rowspan=2, padx=2)
+        ctk.CTkLabel(badges, text=entry["source"], font=ctk.CTkFont(size=9),
+                     fg_color=SRC_BADGE_BG, text_color=SRC_BADGE_FG,
+                     corner_radius=6).pack(pady=1)
+        if entry.get("suspicious"):
+            ctk.CTkLabel(badges, text="похоже на мусор", font=ctk.CTkFont(size=9),
+                         fg_color=("#fca5a5", "#991b1b"), text_color=("#7f1d1d", "#fee2e2"),
+                         corner_radius=6).pack(pady=1)
+        enabled = not entry["disabled_store"]
+        btn = ctk.CTkButton(self, text="Отключить" if enabled else "Включить",
+                            width=100, height=30,
+                            fg_color=BTN_GRAY if enabled else GREEN,
+                            hover_color=BTN_GRAY_HOVER if enabled else "#15803d",
+                            border_width=1 if enabled else 0,
+                            border_color=BTN_BORDER, text_color=BTN_TEXT if enabled else "#ffffff",
+                            command=lambda: app.on_toggle_startup(self, not enabled))
+        btn.grid(row=0, column=2, rowspan=2, padx=(4, 12))
+
+
 class SettingsWindow(ctk.CTkToplevel):
     """Окно настроек: VPN, автообновление, автозапуск, параметры winget."""
 
@@ -487,6 +523,9 @@ class SettingsWindow(ctk.CTkToplevel):
                                     str(self.cfg.auto_interval_hours))
         self.sw_autoall = self._switch(scroll, "При автопроверке сразу обновлять всё",
                                        self.cfg.auto_update_all)
+        self.sw_night = self._switch(
+            scroll, "Ночной режим: автообновление «всё» только в 23:00–07:00",
+            getattr(self.cfg, "night_mode", False))
         self.sw_restore = self._switch(
             scroll, "Точка восстановления перед обновлением (нужны права администратора)",
             self.cfg.restore_point)
@@ -704,6 +743,7 @@ class SettingsWindow(ctk.CTkToplevel):
         cfg.update_npm = bool(self.sw_npm.var.get())
         cfg.auto_interval_hours = self._float(self.e_interval, 0.0, 0.0)
         cfg.auto_update_all = bool(self.sw_autoall.var.get())
+        cfg.night_mode = bool(self.sw_night.var.get())
         cfg.restore_point = bool(self.sw_restore.var.get())
         cfg.vpn_kill_switch = bool(self.sw_killswitch.var.get())
         cfg.start_with_windows = bool(self.sw_autostart.var.get())
@@ -878,7 +918,8 @@ class App(ctk.CTk):
                                ("bloat", "🗑  Мусор"),
                                ("history", "🕘  История"),
                                ("faq", "❔  FAQ"),
-                               ("checks", "🩺  Проверки")):
+                               ("checks", "🩺  Проверки"),
+                               ("startup", "🚀  Автозагрузка")):
             btn = ctk.CTkButton(side, text=label, height=32, anchor="w",
                                 fg_color="transparent",
                                 text_color=NAV_TEXT,
@@ -977,6 +1018,7 @@ class App(ctk.CTk):
         self._build_history_view()
         self._build_faq_view()
         self._build_checks_view()
+        self._build_startup_view()
 
         self.log_frame = ctk.CTkFrame(main, height=190)
         self.log_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 12))
@@ -988,6 +1030,9 @@ class App(ctk.CTk):
         ctk.CTkButton(log_header, text="Очистить", width=80, height=24,
                       fg_color=BTN_GRAY, hover_color=BTN_GRAY_HOVER,
                       command=self._clear_log).pack(side="right")
+        ctk.CTkButton(log_header, text="💾 Сохранить", width=100, height=24,
+                      fg_color=BTN_GRAY, hover_color=BTN_GRAY_HOVER,
+                      command=self._export_log).pack(side="right", padx=(0, 6))
         self.log_box = ctk.CTkTextbox(self.log_frame, font=ctk.CTkFont(family="Consolas", size=11),
                                       fg_color=LOG_BG, text_color=LOG_FG, wrap="word")
         self.log_box.pack(fill="both", expand=True, padx=10, pady=(4, 10))
@@ -1045,6 +1090,10 @@ class App(ctk.CTk):
                                              fg_color=GREEN, hover_color="#15803d",
                                              command=self.on_cleanup_run)
         self.btn_cleanup_run.pack(side="right")
+        ctk.CTkButton(bottom, text="✨  Навести порядок", width=170,
+                      fg_color=BTN_GRAY, hover_color=BTN_GRAY_HOVER,
+                      border_width=1, border_color=BTN_BORDER, text_color=BTN_TEXT,
+                      command=self.on_tidy_everything).pack(side="right", padx=8)
 
     def on_cleanup_measure(self) -> None:
         if self._tool_busy or self.engine.busy:
@@ -1387,7 +1436,8 @@ class App(ctk.CTk):
             self.btn_upd_all.configure(state=state)
         view = {"updates": self.updates_view, "cleanup": self.cleanup_view,
                 "bloat": self.bloat_view, "history": self.history_view,
-                "faq": self.faq_view, "checks": self.checks_view}[view_id]
+                "faq": self.faq_view, "checks": self.checks_view,
+                "startup": self.startup_view}[view_id]
         view.tkraise()
         if view_id == "history":
             self._refresh_history()
@@ -1520,6 +1570,7 @@ class App(ctk.CTk):
         self.checks_view.grid_rowconfigure(1, weight=1)
         self.checks_view.grid_columnconfigure(0, weight=1)
         self.check_rows: dict[str, dict] = {}
+        self.startup_rows: list = []
         self._checks_busy = False
         self._checks_queue: list[str] = []
 
@@ -1823,7 +1874,7 @@ class App(ctk.CTk):
     def _on_refresh(self) -> None:
         action = {"updates": self.on_scan, "cleanup": self.on_cleanup_measure,
                   "bloat": self.on_bloat_scan, "history": self._refresh_history,
-                  "faq": lambda: None, "checks": self.on_checks_quick}
+                  "faq": lambda: None, "checks": self.on_checks_quick, "startup": self.on_startup_scan}
         action.get(self._current_view, self.on_scan)()
 
     def on_checks_quick(self) -> None:
@@ -1864,6 +1915,11 @@ class App(ctk.CTk):
             self.q.put({"type": "pkg_info", "text": text})
 
         threading.Thread(target=work, daemon=True, name="pkg-info").start()
+
+    def _show_pkg_install_log(self, pkg: PackageUpdate) -> None:
+        text = self.engine.package_logs.get(pkg.key, "")
+        header = "Лог последней установки: " + pkg.name + " (" + pkg.pkg_id + ")"
+        self._show_pkg_info_dialog(header + "\n\n" + (text or "Лог пуст."))
 
     def _show_pkg_info_dialog(self, text: str) -> None:
         win = ctk.CTkToplevel(self)
@@ -2000,6 +2056,129 @@ class App(ctk.CTk):
             self.q.put({"type": "tool_busy", "value": False})
 
         threading.Thread(target=work, daemon=True, name="bundle-import").start()
+
+    # ======================================================================
+    # Раздел «Автозагрузка»
+    # ======================================================================
+    def _build_startup_view(self) -> None:
+        self.startup_view = ctk.CTkFrame(self.views, fg_color="transparent")
+        self.startup_view.grid(row=0, column=0, sticky="nsew")
+        self.startup_view.grid_rowconfigure(1, weight=1)
+        self.startup_view.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(self.startup_view, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+        ctk.CTkLabel(header, text="Автозагрузка",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(header, text="Программы, стартующие вместе с Windows. "
+                                  "Отключение обратимо: реестровые записи "
+                                  "переносятся в хранилище Обновлятора, ярлыки "
+                                  "переименовываются.",
+                     font=ctk.CTkFont(size=11), text_color=MUTED,
+                     wraplength=700, justify="left").pack(anchor="w")
+        ctk.CTkButton(header, text="🔄  Обновить список", width=170,
+                      fg_color=BTN_GRAY, hover_color=BTN_GRAY_HOVER,
+                      border_width=1, border_color=BTN_BORDER, text_color=BTN_TEXT,
+                      command=self.on_startup_scan).pack(side="right")
+
+        self.startup_scroll = ctk.CTkScrollableFrame(self.startup_view,
+                                                     fg_color="transparent")
+        self.startup_scroll.grid(row=1, column=0, sticky="nsew", padx=10)
+        self.startup_empty = ctk.CTkLabel(
+            self.startup_scroll, text="Нажмите «Обновить список»",
+            text_color=FAINT, font=ctk.CTkFont(size=13))
+        self.startup_empty.pack(pady=60)
+
+    def on_startup_scan(self) -> None:
+        if self._tool_busy or self.engine.busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        self._tool_busy = True
+
+        def work():
+            entries = startup_mod.list_entries()
+            import dataclasses
+            self.q.put({"type": "startup_list", "entries": entries})
+            self.q.put({"type": "tool_busy", "value": False})
+
+        threading.Thread(target=work, daemon=True, name="startup-scan").start()
+
+    def _rebuild_startup(self, entries: list) -> None:
+        for w in self.startup_scroll.winfo_children():
+            if w is not self.startup_empty:
+                w.destroy()
+        self.startup_rows.clear()
+        self.startup_empty.pack_forget()
+        if not entries:
+            self.startup_empty.configure(text="Автозагрузка пуста")
+            self.startup_empty.pack(pady=60)
+            return
+        for e in entries:
+            row = StartupRow(self.startup_scroll, e, self)
+            row.pack(fill="x", padx=8, pady=4)
+            self.startup_rows.append(row)
+        self.log(f"Автозагрузка: {len(entries)} записей", "info")
+
+    def on_toggle_startup(self, row, enable: bool) -> None:
+        if self._tool_busy or self.engine.busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        entry = row.entry
+        if not enable and not entry.get("writable"):
+            messagebox.showinfo(APP_NAME, "Запись в HKLM: нужны права "
+                                "администратора (кнопка 🔑 в сайдбаре).")
+            return
+        self._tool_busy = True
+
+        def work():
+            ok, msg = (startup_mod.enable_entry(entry) if enable
+                       else startup_mod.disable_entry(entry))
+            fresh = startup_mod.list_entries()
+            self.q.put({"type": "startup_list", "entries": fresh})
+            self.q.put({"type": "log", "text": f"«{entry['name']}»: {msg}",
+                        "level": "ok" if ok else "error"})
+            if ok and not enable:
+                history_mod.append("autostart", name=entry["name"], action="disable")
+            self.q.put({"type": "tool_busy", "value": False})
+
+        threading.Thread(target=work, daemon=True, name="startup-toggle").start()
+
+    # ======================================================================
+    # Уборка «всё сразу» + экспорт журнала
+    # ======================================================================
+    def on_tidy_everything(self) -> None:
+        """«✨ Навести порядок»: выбрать все безопасные цели очистки и
+        запустить уборку (с одним подтверждением), плюс _MEI-остатки."""
+        if self._tool_busy or self.engine.busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        for card in self.cleanup_cards.values():
+            card.var.set(True)
+        self._mei_cleanup_async(quiet=True)
+        self.on_cleanup_run()
+
+    def _mei_cleanup_async(self, quiet: bool = False) -> None:
+        def work():
+            dirs, freed = __import__("core").cleanup_stale_mei()
+            if dirs and not quiet:
+                self.q.put({"type": "log",
+                            "text": f"Убрано осиротевших _MEI-папок: {dirs} "
+                                    f"({freed / 1048576:.1f} МБ)", "level": "ok"})
+        threading.Thread(target=work, daemon=True, name="mei").start()
+
+    def _export_log(self) -> None:
+        path = filedialog.asksaveasfilename(
+            title="Куда сохранить журнал",
+            defaultextension=".txt",
+            initialfile=f"Обновлятор-журнал-{time.strftime('%Y-%m-%d')}.txt",
+            filetypes=[("Текст", "*.txt")])
+        if not path:
+            return
+        try:
+            Path(path).write_text(self.log_box.get("1.0", "end"), encoding="utf-8")
+            self.log(f"Журнал сохранён: {path}", "ok")
+        except OSError as e:
+            messagebox.showerror(APP_NAME, "Не удалось сохранить журнал:\n" + str(e))
 
     # ======================================================================
     # Трей и окно
@@ -2291,6 +2470,8 @@ class App(ctk.CTk):
             self._refresh_tool_buttons()
         elif kind == "check_done":
             self._checks_done(ev["key"], ev["res"], bool(ev.get("quiet")))
+        elif kind == "startup_list":
+            self._rebuild_startup(ev["entries"])
         elif kind == "checks_busy":
             self._checks_busy = bool(ev.get("value"))
             if not self._checks_busy:
@@ -2434,6 +2615,9 @@ class App(ctk.CTk):
         if pkg.key in self.cfg.failed_updates:
             menu.add_command(label="Снова предлагать обновление",
                              command=lambda: self._clear_failed(pkg.key))
+        if pkg.key in getattr(self.engine, "package_logs", {}):
+            menu.add_command(label="📜  Лог установки",
+                             command=lambda: self._show_pkg_install_log(pkg))
         menu.add_command(label="ℹ  О пакете",
                          command=lambda: self._on_pkg_info(pkg))
         menu.add_command(label="Копировать ID",
@@ -2753,6 +2937,12 @@ class App(ctk.CTk):
 
     def _on_auto_trigger(self) -> None:
         if self.engine.busy or self._closing:
+            return
+        if (self.cfg.night_mode and self.cfg.auto_update_all
+                and not (time.localtime().tm_hour >= 23
+                         or time.localtime().tm_hour < 7)):
+            self.log("Ночной режим: автоустановку отложу до 23:00–07:00", "info")
+            self.after(1800_000, self._on_auto_trigger)   # повтор через 30 минут
             return
         self.log(f"Автопроверка по расписанию ({self.cfg.auto_interval_hours:g} ч)", "info")
         if self.cards:

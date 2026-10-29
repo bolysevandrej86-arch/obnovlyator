@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.6"
+APP_VERSION = "1.7"
 
 
 def _resolve_base_dir() -> Path:
@@ -560,6 +560,7 @@ class Config:
     selfupdate_check_hours: float = 6.0   # фоновая проверка каждые N часов (0 = вручную)
     selfupdate_skipped: list = field(default_factory=list)  # версии «пропустить»
     app_hash: str = ""               # эталонный хеш файлов приложения (проверки)
+    night_mode: bool = False         # автообновление «всё» только ночью (23:00–07:00)
 
     # Правила обновления пакетов
     # Чёрный список: эти пакеты никогда не обновляются (критичные для работы)
@@ -807,6 +808,43 @@ def start_show_window_watcher(callback) -> None:
     threading.Thread(target=loop, daemon=True, name="show-window").start()
 
 
+def cleanup_stale_mei(max_age_hours: float = 6.0) -> tuple[int, int]:
+    """Удаляет осиротевшие _MEI* папки PyInstaller из %TEMP% (наш главный
+    симптом — предупреждение «Failed to remove temporary directory» после
+    самообновления). Трогает только папки старше max_age_hours и те, что
+    реально удаляются; занятые пропускает. Возвращает (папок, байт)."""
+    temp = Path(os.environ.get("TEMP") or os.environ.get("TMP")
+                or Path.home() / "AppData" / "Local" / "Temp")
+    cutoff = time.time() - max_age_hours * 3600
+    dirs = removed = freed = 0
+    try:
+        candidates = list(temp.glob("_MEI*"))
+    except OSError:
+        return 0, 0
+    for d in candidates:
+        if not d.is_dir() or d.name == "_MEI":
+            continue
+        try:
+            if d.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        try:
+            for f in d.rglob("*"):
+                try:
+                    if f.is_file():
+                        freed += f.stat().st_size
+                except OSError:
+                    pass
+            dirs += 1
+            shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            continue
+    if removed or freed:
+        log.info("Убрано осиротевших _MEI-папок: %s (%.1f МБ)", dirs, freed / 1048576)
+    return dirs, freed
+
+
 def windows_build_ok() -> tuple[bool, str]:
     """winget доступен начиная с Windows 10 сборки 17763 (1809)."""
     try:
@@ -1022,6 +1060,7 @@ class Engine:
         self.cfg = cfg
         self.events = events
         self.packages: dict[str, PackageUpdate] = {}
+        self.package_logs: dict[str, str] = {}   # последний вывод установки
         self._thread: threading.Thread | None = None
         self._cancel = threading.Event()
         self._procs: list[subprocess.Popen] = []
@@ -1269,6 +1308,7 @@ class Engine:
                 rc, out = self._run(cmd, timeout=max(60, int(self.cfg.timeout_sec)),
                                     on_line=lambda line: self.log(line, "debug"))
                 last_rc, last_out = rc, out
+                self.package_logs[pkg.key] = out[-20000:]   # для «Показать лог»
                 if rc == 0:
                     self.emit(type="pkg", key=pkg.key, status="ok")
                     self.log(f"{pkg.name}: обновлено ✔", "ok")

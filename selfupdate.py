@@ -697,6 +697,14 @@ class SelfUpdater:
                 p.unlink()
             except OSError:
                 pass
+        # отработанные staging-экзешники старше двух недель — тоже мусор
+        cutoff = time.time() - 14 * 86400
+        for p in self.paths.staging.glob("*.exe"):
+            try:
+                if p.stat().st_mtime < cutoff:
+                    p.unlink()
+            except OSError:
+                pass
         marker = self.paths.old_marker()
         if marker.exists():
             try:

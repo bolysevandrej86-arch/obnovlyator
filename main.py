@@ -9,6 +9,7 @@
                        --minimized (старт свёрнутым в трей)
 """
 import sys
+import threading
 
 
 def _selftest(no_net: bool) -> int:
@@ -19,6 +20,12 @@ def _selftest(no_net: bool) -> int:
     from core import (CONFIG_PATH, Config, VpnManager, autostart_enabled,
                       setup_logging, scan_winget, winget_exe)
     setup_logging()
+
+    # уборка осиротевших _MEI-папок от прошлых запусков (фоном, чтобы не
+    # задерживать старт) — тот самый «Failed to remove temporary directory»
+    from core import cleanup_stale_mei
+    threading.Thread(target=cleanup_stale_mei, daemon=True,
+                     name="mei-cleanup").start()
     ok = True
 
     print("[1] Конфигурация")
