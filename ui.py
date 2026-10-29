@@ -2370,6 +2370,14 @@ class App(ctk.CTk):
         self._auto_stop.set()
         self.engine.cancel()
         tray_mod.stop_tray(self)
+        sw = getattr(self, "_settings_win", None)
+        if sw is not None:
+            try:
+                sw.grab_release()
+                sw.destroy()
+            except Exception:
+                pass
+            self._settings_win = None
         self.destroy()
 
     def apply_theme_mode(self, mode: str) -> None:
@@ -2398,6 +2406,14 @@ class App(ctk.CTk):
 
     def _after_theme_paint(self) -> None:
         """Всё, что не обязано блокировать перекраску, — после неё."""
+        # если перекраска застала открытым выпадающий список или модальное
+        # окно, их grab может «повиснуть» и заглушить все клики — снимаем
+        holder = self.grab_current()
+        if holder is not None:
+            try:
+                holder.grab_release()
+            except Exception:
+                pass
         self._apply_log_tags()
         try:
             self.cfg.save()
@@ -2463,6 +2479,18 @@ class App(ctk.CTk):
             self.set_vpn_pill(ev.get("active"), ev.get("reason", ""))
         elif kind == "busy":
             self._set_busy(bool(ev.get("value")))
+        elif kind == "tray":
+            action = ev.get("action")
+            if action == "open":
+                self.tray_open_window()
+            elif action == "check":
+                self.tray_check_updates()
+            elif action == "update":
+                self.tray_update_all()
+            elif action == "selfupdate":
+                self.tray_check_selfupdate()
+            elif action == "quit":
+                self.tray_quit()
         elif kind == "auto_trigger":
             self._on_auto_trigger()
         elif kind == "tool_busy":
