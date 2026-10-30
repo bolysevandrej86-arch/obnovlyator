@@ -112,10 +112,15 @@ def main() -> None:
                       signal_show_window, start_show_window_watcher,
                       windows_build_ok)
 
-    # Чёткий рендер на экранах с масштабированием: без этого Windows
-    # растягивает картинку 96 DPI — текст и линии выглядят «пиксельными».
+    # Чёткий рендер: system-aware DPI (1) — стабильно и быстро на любых
+    # экранах. Per-monitor v2 (2) на части ноутбуков с масштабированием
+    # даёт патологические лаги CustomTkinter — включается в конфиге.
+    cfg_early = Config.load()
     try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)   # PER_MONITOR_AWARE
+        if cfg_early.per_monitor_dpi:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)   # PER_MONITOR_AWARE
+        else:
+            ctypes.windll.shcore.SetProcessDpiAwareness(1)   # SYSTEM_AWARE
     except Exception:
         try:
             ctypes.windll.user32.SetProcessDPIAware()

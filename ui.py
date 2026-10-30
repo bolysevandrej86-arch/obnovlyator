@@ -362,6 +362,8 @@ class HistoryChart(ctk.CTkLabel):
             pass  # график не должен ронять интерфейс
 
     def _render(self, force: bool = False) -> None:
+        if getattr(self, "_perf_disabled", False):
+            return
         from PIL import Image, ImageDraw, ImageFont
 
         w = max(self.winfo_width(), 10)
@@ -526,6 +528,9 @@ class SettingsWindow(ctk.CTkToplevel):
         self.sw_night = self._switch(
             scroll, "Ночной режим: автообновление «всё» только в 23:00–07:00",
             getattr(self.cfg, "night_mode", False))
+        self.sw_perf = self._switch(
+            scroll, "Режим слабых ПК: меньше фоновых задач, анимаций и графика",
+            getattr(self.cfg, "perf_mode", False))
         self.sw_restore = self._switch(
             scroll, "Точка восстановления перед обновлением (нужны права администратора)",
             self.cfg.restore_point)
@@ -626,6 +631,17 @@ class SettingsWindow(ctk.CTkToplevel):
         ctk.CTkButton(st_row, text="📥  Импортировать настройки", width=210,
                       command=self._import_settings).pack(side="left", padx=8)
 
+        # --- Удаление -----------------------------------------------------
+        self._section(scroll, "Удаление")
+        ctk.CTkButton(scroll, text="🗑  Удалить Обновлятор с этого компьютера",
+                      height=34, fg_color=("#dc2626", "#7f1d1d"),
+                      hover_color=("#b91c1c", "#991b1b"),
+                      command=self._uninstall_self).pack(fill="x", pady=2)
+        ctk.CTkLabel(scroll, text="Убирает автозапуск, настройки, историю и "
+                                  "файлы программы. Действие необратимо.",
+                     font=ctk.CTkFont(size=10), text_color=MUTED,
+                     anchor="w", justify="left").pack(fill="x")
+
         # --- Кнопки -------------------------------------------------------
         bottom = ctk.CTkFrame(self, fg_color="transparent")
         bottom.pack(fill="x", padx=14, pady=12)
@@ -675,6 +691,58 @@ class SettingsWindow(ctk.CTkToplevel):
             return max(minimum, float(self._entry(e).replace(",", ".")))
         except ValueError:
             return default
+
+    def _uninstall_self(self) -> None:
+        """Готовит .bat-деинсталлятор (без питона, работает на любом ПК)
+        и закрывает приложение; bat сам удалит файлы после закрытия."""
+        if not messagebox.askyesno(
+                APP_NAME,
+                "Удалить Обновлятор с этого компьютера?\n\n"
+                "Будут удалены: автозапуск, настройки, история, журналы и "
+                "файлы программы. Отменить удаление будет нельзя."):
+            return
+        import subprocess
+        base = Path(__file__).resolve().parent
+        frozen = getattr(sys, "frozen", False)
+        exe_dir = Path(sys.executable).resolve().parent if frozen else base
+        tmp = Path(os.environ.get("TEMP") or base) / "obnovlyator_uninstall.bat"
+        lines = [
+            "@echo off",
+            "chcp 65001 >nul",
+            "title Uninstalling Obnovlyator...",
+            "rem ждём закрытия приложения",
+            "ping -n 3 127.0.0.1 >nul",
+            'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run" '
+            '/v Obnovlyator /f >nul 2>nul',
+            'reg delete "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\'
+            'RunDisabled_Obnovlyator" /f >nul 2>nul',
+        ]
+        targets = []
+        for name in ("config.json", "config.json.bak", "config.json.broken",
+                     "config.json.tmp", "history.jsonl"):
+            targets.append(exe_dir / name)
+            if not frozen:
+                targets.append(base / name)
+        targets += [exe_dir / "Obnovlyator.exe",
+                    exe_dir / "Obnovlyator.exe.old"]
+        if not frozen:
+            for name in ("Obnovlyator_v1.6.exe.bak",):
+                targets.append(base / name)
+        for f in targets:
+            lines.append(f'del /q /f "{f}" >nul 2>nul')
+        for d in ([exe_dir / "logs", exe_dir / "__pycache__"]
+                  + ([] if frozen else [base / "logs", base / "__pycache__"])):
+            lines.append(f'rd /s /q "{d}" >nul 2>nul')
+        if frozen:
+            # после удаления файлов пустую папку тоже убираем
+            lines.append(f'rd /s /q "{exe_dir}" >nul 2>nul')
+        lines.append('del "%~f0" >nul 2>nul')
+        tmp.write_text("\r\n".join(lines) + "\r\n", encoding="utf-8")
+        subprocess.Popen(
+            ["cmd", "/c", "start", "/min", "", str(tmp)],
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) | 0x00000008,
+            close_fds=True)
+        self.app._quit()
 
     def _check_vpn(self) -> None:
         self.vpn_result.configure(text="проверяю…", text_color=MUTED)
@@ -751,6 +819,8 @@ class SettingsWindow(ctk.CTkToplevel):
         cfg.auto_interval_hours = self._float(self.e_interval, 0.0, 0.0)
         cfg.auto_update_all = bool(self.sw_autoall.var.get())
         cfg.night_mode = bool(self.sw_night.var.get())
+        perf_changed = cfg.perf_mode != bool(self.sw_perf.var.get())
+        cfg.perf_mode = bool(self.sw_perf.var.get())
         cfg.restore_point = bool(self.sw_restore.var.get())
         cfg.vpn_kill_switch = bool(self.sw_killswitch.var.get())
         cfg.start_with_windows = bool(self.sw_autostart.var.get())
@@ -791,6 +861,8 @@ class SettingsWindow(ctk.CTkToplevel):
 
         cfg.save()
         self.app.log("Настройки сохранены", "ok")
+        if perf_changed:
+            self.app.log("Режим слабых ПК применится после перезапуска приложения", "info")
         self.destroy()
 
 
@@ -820,8 +892,15 @@ class App(ctk.CTk):
         _force_segoe_font()
 
         self.title(f"{APP_NAME} — автообновление программ")
-        self.geometry("1150x740")
-        self.minsize(960, 600)
+        # адаптация под маленькие экраны ноутбуков (1366x768 и меньше):
+        # окно и минимум не должны вылезать за пределы экрана
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        win_h = max(560, min(740, sh - 90))
+        win_w = max(880, min(1150, sw - 60))
+        self.geometry(f"{win_w}x{win_h}")
+        self.minsize(min(960, win_w), min(600, win_h))
+        self._small_screen = sh < 860 or win_h < 700
 
         self.q: queue.Queue = queue.Queue()
         self.engine = Engine(self.cfg, self.q)
@@ -837,6 +916,7 @@ class App(ctk.CTk):
         self._theme_busy = False
         self._theme_pending = None
         self._search_after_id = None
+        self._poll_ms = 200 if self.cfg.perf_mode else 100
         self._tags_mode = None           # тема, под которую окрашены теги журнала
         self.cleanup_cards: dict[str, CleanupCard] = {}
         self._cleanup_sizes: dict[str, int | None] = {}
@@ -863,9 +943,10 @@ class App(ctk.CTk):
         self.bind_all("<F5>", lambda e: self._on_refresh())
         self.bind_all("<Control-a>", lambda e: self._on_select_all())
         self.bind_all("<Control-A>", lambda e: self._on_select_all())
-        self.after(100, self._poll)
-        self.after(400, self._check_vpn_async)
-        self.after(1500, self._selfupdate_init)   # фиксация успеха обновления + первая проверка
+        self.after(self._poll_ms, self._poll)
+        self.after(1200, self._check_vpn_async)   # фон не мешает старту
+        self.after(5000 if self.cfg.perf_mode else 1500,
+                  self._selfupdate_init)   # фиксация успеха + первая проверка
         threading.Thread(target=self._auto_loop, daemon=True, name="auto").start()
         if self.cfg.minimize_to_tray:
             try:
@@ -883,9 +964,16 @@ class App(ctk.CTk):
     # Построение интерфейса
     # ======================================================================
     def _build(self) -> None:
-        side = ctk.CTkFrame(self, width=236, corner_radius=0, fg_color=SIDEBAR_BG)
-        side.grid(row=0, column=0, sticky="nsw")
-        side.pack_propagate(False)
+        # на малых экранах сайдбар прокручивается — низ (журнал, настройки)
+        # больше не обрезается
+        if self._small_screen:
+            side = ctk.CTkScrollableFrame(self, width=236, corner_radius=0,
+                                          fg_color=SIDEBAR_BG)
+            side.grid(row=0, column=0, sticky="nsw")
+        else:
+            side = ctk.CTkFrame(self, width=236, corner_radius=0, fg_color=SIDEBAR_BG)
+            side.grid(row=0, column=0, sticky="nsw")
+            side.pack_propagate(False)
 
         ctk.CTkLabel(side, text="⚡ Обновлятор",
                      font=ctk.CTkFont(size=22, weight="bold")).pack(pady=(18, 0))
@@ -1020,12 +1108,25 @@ class App(ctk.CTk):
         self.hidden_lbl = ctk.CTkLabel(self.list_frame, text="", anchor="w",
                                        text_color=MUTED, font=ctk.CTkFont(size=11))
 
-        self._build_cleanup_view()
-        self._build_bloat_view()
-        self._build_history_view()
-        self._build_faq_view()
-        self._build_checks_view()
-        self._build_startup_view()
+        # ошибка сборки одного раздела не должна рушить остальные
+        for name, builder in (
+                ("cleanup", self._build_cleanup_view),
+                ("bloat", self._build_bloat_view),
+                ("history", self._build_history_view),
+                ("faq", self._build_faq_view),
+                ("checks", self._build_checks_view),
+                ("startup", self._build_startup_view)):
+            try:
+                builder()
+            except Exception:                                    # noqa: BLE001
+                log.exception(f"Раздел «{name}» не собрался")
+                placeholder = ctk.CTkFrame(self.views, fg_color="transparent")
+                placeholder.grid(row=0, column=0, sticky="nsew")
+                ctk.CTkLabel(placeholder,
+                             text="Раздел не открылся на этом компьютере:\n"
+                                  + str(sys.exc_info()[1]),
+                             text_color=FAINT, justify="center").pack(pady=60)
+                self.__dict__[f"{name}_view"] = placeholder
 
         self.log_frame = ctk.CTkFrame(main, height=190)
         self.log_frame.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 12))
@@ -1663,7 +1764,8 @@ class App(ctk.CTk):
             self.check_rows[key]["status_lbl"] = badge
 
         # целостность — мгновенная, прогоним сразу при открытии раздела
-        self.after(400, lambda: self._run_check("integrity", 1.0, quiet=True))
+        if not self.cfg.perf_mode:
+            self.after(2500, lambda: self._run_check("integrity", 1.0, quiet=True))
 
     CHECK_COLORS = {
         "ok": ("✔", ("#86efac", "#166534"), ("#14532d", "#dcfce7")),
@@ -1773,6 +1875,7 @@ class App(ctk.CTk):
 
         # --- график активности по дням (14 дней, чистый tk.Canvas без matplotlib)
         self.history_chart = HistoryChart(self.history_view, height=130)
+        self.history_chart._perf_disabled = self.cfg.perf_mode
         self.history_chart.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 2))
 
         self.history_scroll = ctk.CTkScrollableFrame(self.history_view,
@@ -2484,7 +2587,7 @@ class App(ctk.CTk):
                     traceback.print_exc()
         except queue.Empty:
             pass
-        self.after(100, self._poll)
+        self.after(self._poll_ms, self._poll)
 
     def _handle(self, ev: dict) -> None:
         kind = ev.get("type")
@@ -2971,8 +3074,9 @@ class App(ctk.CTk):
         # без обрезки текстовое поле постепенно начинает тормозить
         try:
             count = int(self.log_box.index("end-1c").split(".")[0])
-            if count > 600:
-                self.log_box.delete("1.0", f"{count - 400}.0")
+            cap, keep = (250, 150) if self.cfg.perf_mode else (600, 400)
+            if count > cap:
+                self.log_box.delete("1.0", f"{count - keep}.0")
         except Exception:
             pass
         stamp = time.strftime("%H:%M:%S")

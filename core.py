@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.7.3"
+APP_VERSION = "1.7.4"
 
 
 def _resolve_base_dir() -> Path:
@@ -561,6 +561,9 @@ class Config:
     selfupdate_skipped: list = field(default_factory=list)  # версии «пропустить»
     app_hash: str = ""               # эталонный хеш файлов приложения (проверки)
     night_mode: bool = False         # автообновление «всё» только ночью (23:00–07:00)
+    perf_mode: bool = False          # режим слабых ПК: меньше анимаций и фона
+    per_monitor_dpi: bool = False    # per-monitor DPI v2 (на некоторых
+                                     # ноутбуках с масштабированием даёт лаги)
 
     # Правила обновления пакетов
     # Чёрный список: эти пакеты никогда не обновляются (критичные для работы)
