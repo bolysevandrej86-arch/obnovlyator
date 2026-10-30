@@ -343,10 +343,12 @@ class SelfUpdater:
 
     def __init__(self, current_version: str, channel: str = DEFAULT_CHANNEL,
                  skip_versions: Optional[set] = None,
-                 repo: str = "", public_key: str = "") -> None:
+                 repo: str = "", public_key: str = "",
+                 mark_skip=None) -> None:
         self.current_version = current_version
         self.channel = channel if channel in ("stable", "beta", "nightly") else "stable"
         self.skip_versions = set(skip_versions or ())
+        self.mark_skip = mark_skip     # вызывается при откате на битую версию
         self.repo = repo.strip().strip("/")
         self.public_key = (public_key or "").strip()
         self.paths = SelfUpdatePaths()
@@ -360,7 +362,7 @@ class SelfUpdater:
     # ------------------------------------------------------------------
     #  ПРОВЕРКА
     # ------------------------------------------------------------------
-    def check_for_updates(self) -> Optional[UpdateInfo]:
+    def check_for_updates(self, ignore_skip: bool = False) -> Optional[UpdateInfo]:
         if not self.configured:
             log.info("Самообновление отключено: SELFUPDATE_REPO не заполнен "
                      "(см. selfupdate.py) — это нормально до публикации релизов")
@@ -393,7 +395,8 @@ class SelfUpdater:
                 continue
             if not version_newer(str(data["version"]), self.current_version):
                 return None                 # первый релиз канала — уже проверен
-            if str(data["version"]) in self.skip_versions:
+            if (str(data["version"]) in self.skip_versions
+                    and not ignore_skip):
                 log.info("Версия %s помечена «пропустить»", data["version"])
                 return None
             exe_url = next((a.get("browser_download_url") for a in assets
@@ -672,6 +675,11 @@ class SelfUpdater:
                 self.paths.state_file.unlink(missing_ok=True)
                 record_history(status="rolled_back", from_version=to_ver,
                                to_version=from_ver, detail=reason)
+                if self.mark_skip:
+                    try:
+                        self.mark_skip(to_ver)
+                    except Exception:
+                        log.debug("mark_skip не сработал", exc_info=True)
                 notify_selfupdate("Обновлятор", f"Обновление до {to_ver} не удалось, "
                                                 f"выполнен откат на {from_ver}")
                 time.sleep(0.3)
@@ -742,10 +750,21 @@ def create_updater(cfg, current_version: str) -> Optional[SelfUpdater]:
         return None
     channel = getattr(cfg, "update_channel", DEFAULT_CHANNEL)
     skipped = set(getattr(cfg, "selfupdate_skipped", []) or [])
+    def _mark_skip(version: str) -> None:
+        """При автооткате помечаем битую версию — чтобы авто-проверки
+        не зацикливались на ней. Ручная проверка игнорирует пометку."""
+        try:
+            cfg.selfupdate_skipped = sorted(
+                set(getattr(cfg, "selfupdate_skipped", []) or []) | {version})
+            cfg.save()
+        except Exception:
+            pass
+
     return SelfUpdater(
         current_version=current_version,
         channel=channel,
         skip_versions=skipped,
         repo=SELFUPDATE_REPO,
         public_key=SELFUPDATE_PUBLIC_KEY,
+        mark_skip=_mark_skip,
     )

@@ -888,7 +888,13 @@ class App(ctk.CTk):
         self.cfg = Config.load()
         ctk.set_appearance_mode("system" if self.cfg.theme_mode == "system"
                                 else self.cfg.theme_mode)
-        ctk.set_default_color_theme("blue")
+        try:
+            ctk.set_default_color_theme("blue")
+        except Exception as e:
+            # частичная распаковка onefile (антивирус/мало места на диске):
+            # тема уже загружена при импорте customtkinter — работаем с ней,
+            # иначе приложение падало на старте после самообновления
+            log.warning("Файлы темы недоступны, использую встроенную: %r", e)
         _force_segoe_font()
 
         self.title(f"{APP_NAME} — автообновление программ")
@@ -916,7 +922,18 @@ class App(ctk.CTk):
         self._theme_busy = False
         self._theme_pending = None
         self._search_after_id = None
-        self._poll_ms = 200 if self.cfg.perf_mode else 100
+        # слабое железо: авто-включаем облегчения (перекрывается настройкой)
+        weak = False
+        try:
+            import psutil
+            weak = (psutil.virtual_memory().total <= 6 * 2**30
+                    or (psutil.cpu_count(logical=False) or 4) <= 4)
+        except Exception:
+            weak = False
+        self._perf = bool(self.cfg.perf_mode) or weak
+        if weak and not self.cfg.perf_mode:
+            log.info("Обнаружен слабый ПК — включены облегчения интерфейса")
+        self._poll_ms = 200 if self._perf else 100
         self._tags_mode = None           # тема, под которую окрашены теги журнала
         self.cleanup_cards: dict[str, CleanupCard] = {}
         self._cleanup_sizes: dict[str, int | None] = {}
@@ -945,7 +962,7 @@ class App(ctk.CTk):
         self.bind_all("<Control-A>", lambda e: self._on_select_all())
         self.after(self._poll_ms, self._poll)
         self.after(1200, self._check_vpn_async)   # фон не мешает старту
-        self.after(5000 if self.cfg.perf_mode else 1500,
+        self.after(5000 if self._perf else 1500,
                   self._selfupdate_init)   # фиксация успеха + первая проверка
         threading.Thread(target=self._auto_loop, daemon=True, name="auto").start()
         if self.cfg.minimize_to_tray:
@@ -1764,7 +1781,7 @@ class App(ctk.CTk):
             self.check_rows[key]["status_lbl"] = badge
 
         # целостность — мгновенная, прогоним сразу при открытии раздела
-        if not self.cfg.perf_mode:
+        if not self._perf:
             self.after(2500, lambda: self._run_check("integrity", 1.0, quiet=True))
 
     CHECK_COLORS = {
@@ -1875,7 +1892,7 @@ class App(ctk.CTk):
 
         # --- график активности по дням (14 дней, чистый tk.Canvas без matplotlib)
         self.history_chart = HistoryChart(self.history_view, height=130)
-        self.history_chart._perf_disabled = self.cfg.perf_mode
+        self.history_chart._perf_disabled = self._perf
         self.history_chart.grid(row=1, column=0, sticky="ew", padx=16, pady=(4, 2))
 
         self.history_scroll = ctk.CTkScrollableFrame(self.history_view,
@@ -2359,7 +2376,8 @@ class App(ctk.CTk):
             verify_failed = ""          # подпись не сошлась — это важно
             net_text = ""               # тихая ошибка сети
             try:
-                info = self.selfup.check_for_updates()
+                info = self.selfup.check_for_updates(
+                    ignore_skip=manual)   # ручная проверка — даже помеченные
             except selfupdate.VerifyError as e:
                 verify_failed = str(e)
             except selfupdate.NetworkError as e:
@@ -3074,7 +3092,7 @@ class App(ctk.CTk):
         # без обрезки текстовое поле постепенно начинает тормозить
         try:
             count = int(self.log_box.index("end-1c").split(".")[0])
-            cap, keep = (250, 150) if self.cfg.perf_mode else (600, 400)
+            cap, keep = (250, 150) if self._perf else (600, 400)
             if count > cap:
                 self.log_box.delete("1.0", f"{count - keep}.0")
         except Exception:
