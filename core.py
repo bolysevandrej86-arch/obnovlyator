@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.7.5"
+APP_VERSION = "1.7.5.1"
 
 
 def _resolve_base_dir() -> Path:
@@ -751,7 +751,10 @@ def acquire_single_instance() -> bool:
             if ctypes.windll.kernel32.GetLastError() != 183:  # ERROR_ALREADY_EXISTS
                 return True
             if attempt < 11:
+                log.info("Мьютекс занят другим экземпляром, жду (%d/12)",
+                         attempt + 1)
                 time.sleep(0.4)
+        log.warning("Мьютекс не освободился за ~4.5 с — приложение уже запущено")
         return False
     except Exception:
         log.warning("Не удалось создать мьютекс одиночного запуска", exc_info=True)

@@ -8,8 +8,12 @@
 Флаги самообновления:  --post-update (внутренний, ставится автоматически),
                        --minimized (старт свёрнутым в трей)
 """
+import logging
+import os
 import sys
 import threading
+
+log = logging.getLogger("obnovlyator")
 
 
 def _selftest(no_net: bool) -> int:
@@ -128,17 +132,19 @@ def main() -> None:
             pass
 
     setup_logging()
+    # строка старта — по ней видно, дошёл ли процесс вообще до Python
+    # (нет строки = смерть в бутлоадере PyInstaller/распаковке _MEI)
+    log.info("старт v%s pid=%s argv=%s frozen=%s", APP_VERSION, os.getpid(),
+             sys.argv, getattr(sys, "frozen", False))
 
-    # ШАГ БЕЗОПАСНОСТИ №1: ещё до GUI проверяем состояние прошлого обновления.
-    # Если после подмены exe приложение падало 2 раза — оно само откатится
-    # на бэкап и перезапустится (см. selfupdate.handle_startup_state).
     import selfupdate
     _up = selfupdate.create_updater(Config.load(), APP_VERSION)
-    if _up is not None:
-        _up.handle_startup_state()   # может откатить и завершить процесс
 
-    # одиночный экземпляр. --takeover ставит перезапуск от администратора:
-    # старый процесс уже закрывается, новый дожидается освобождения мьютекса.
+    # одиночный экземпляр — ДО проверки состояния обновления: повторные
+    # запуски (в т.ч. нетерпеливые перезапуски после обновления) не должны
+    # двигать счётчики неудач обновлённого exe. --takeover ставит перезапуск
+    # от администратора: старый процесс уже закрывается, новый дожидается
+    # освобождения мьютекса.
     if not acquire_single_instance():
         if "--takeover" in sys.argv:
             deadline = time.time() + 15
@@ -160,7 +166,14 @@ def main() -> None:
                 ctypes.windll.user32.MessageBoxW(
                     0, "Обновлятор уже запущен.\nИщите его иконку в трее (возле часов).",
                     "Обновлятор", 0x40)
+            log.info("второй экземпляр: показал окно первого и выхожу")
             sys.exit(0)
+
+    # ШАГ БЕЗОПАСНОСТИ №2: состояние прошлого обновления — до GUI.
+    # Если после подмены exe приложение падало — само откатится на бэкап
+    # и перезапустится (см. selfupdate.handle_startup_state).
+    if _up is not None:
+        _up.handle_startup_state()   # может откатить и завершить процесс
 
     ok_build, msg = windows_build_ok()
     if not ok_build:
@@ -169,32 +182,17 @@ def main() -> None:
             "Обновлятор", 0x30)  # MB_ICONWARNING
 
     from ui import App
+    log.info("GUI собирается…")
     app = App(is_admin=bool(ctypes.windll.shell32.IsUserAnAdmin()))
-    splash = None
-    if "--post-update" in argv:
-        # короткая плашка «завершаем обновление» — висит, пока GUI поднимается
-        try:
-            import tkinter as _tk
-            splash = _tk.Tk()
-            splash.overrideredirect(True)
-            splash.attributes("-topmost", True)
-            w, h = 420, 130
-            splash.geometry(f"{w}x{h}+{(splash.winfo_screenwidth() - w) // 2} "
-                            f"+{(splash.winfo_screenheight() - h) // 2}")
-            splash.configure(bg="#1b1b20")
-            _tk.Label(splash, text="🔄  Завершаем обновление\nОбновлятора…",
-                      bg="#1b1b20", fg="#e4e4e7", justify="center",
-                      font=("Segoe UI", 13, "bold")).pack(expand=True)
-            splash.update()
-        except Exception:
-            splash = None
+    log.info("GUI собран, вхожу в mainloop")
+    if _up is not None:
+        # GUI жив: после этой отметки смерть процесса не считается падением
+        # обновлённого exe — защита от «медленного старта» на слабых ПК
+        app.after(150, _up.mark_booted)
     if "--minimized" in argv:
         # флаг используется автозапуском: старт свёрнутым в трей
         app.withdraw()
     start_show_window_watcher(lambda: app.after(0, app.tray_open_window))
-    if splash is not None:
-        splash.after(2500, splash.destroy)   # держим пару секунд для верности
-        splash.mainloop()                    # свой мини-цикл для отрисовки
     app.mainloop()
 
 

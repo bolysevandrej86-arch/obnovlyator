@@ -449,6 +449,11 @@ class SelfUpdater:
         part = self.paths.staged_exe(info.version).with_suffix(".exe.part")
         final = self.paths.staged_exe(info.version)
         if final.exists():
+            # уже скачан (например, был откат с этой версии) — не перекачиваем
+            if sha256_file(final) == info.sha256.lower():
+                record_history(status="downloaded", to_version=info.version,
+                               detail="использован уже скачанный файл")
+                return final
             final.unlink()
         record_history(status="downloading", to_version=info.version)
         try:
@@ -595,6 +600,13 @@ class SelfUpdater:
             record_history(status="install_error", detail=str(e)[:200])
             raise ApplyError(f"Не удалось заменить exe: {e}") from e
 
+        # тост ДО запуска нового exe: пользователь должен знать, что
+        # приложение исчезает не «умирая» — иначе перезапускает его руками,
+        # а каждый перезапуск двигал счётчики неудач обновления
+        notify_selfupdate(
+            "Обновлятор",
+            f"Обновление до {info.version} установлено — приложение "
+            "перезапускается. Окно появится через несколько секунд.")
         try:
             subprocess.Popen(
                 [str(target), "--post-update"],
@@ -611,35 +623,98 @@ class SelfUpdater:
             raise ApplyError(f"Не удалось запустить обновлённый exe: {e}") from e
 
         record_history(status="restarting", to_version=info.version)
-        time.sleep(0.3)
+        # пауза перед выходом: тост успевает уйти, у нового exe — фора
+        # по диску/антивирусу, пока старый процесс ещё держит файлы
+        time.sleep(1.2)
         os._exit(0)
 
     # ------------------------------------------------------------------
     #  ЗАПУСК ПОСЛЕ ОБНОВЛЕНИЯ / ЗАЩИТА ОТ ЦИКЛА ПАДЕНИЙ
     # ------------------------------------------------------------------
     def handle_startup_state(self) -> Optional[dict]:
-        """Вызывать ПЕРВЫМ ДЕЛОМ при старте (до создания GUI!).
+        """Вызывать ПОСЛЕ захвата мьютекса одиночного запуска и до GUI.
 
         - чистит мусор прошлых обновлений (.old, .part);
         - если это первый запуск после подмены — сверяет свой хеш;
-        - если приложение падало после обновления 2 раза — автооткат.
+        - если обновлённый exe не может подняться — автооткат.
+
+        Счётчики неудач разделены по тому, ДОКУДА дошёл прошлый процесс:
+        на слабых ПК холодный старт после подмены бывает долгим (антивирус
+        сканирует свежий exe, распаковка _MEI прерывается), а «невидимый»
+        старт пользователь перезапускает руками — и не должен ронять
+        обновление. Поэтому:
+          py_started — прошлый процесс дошёл хотя бы до Python;
+          booted     — поднял GUI и вошёл в mainloop (живой экземпляр).
+        Прошлый ЖИВОЙ экземпляр (booted) означает «второй запуск/перезапуск»,
+        а не падение — счётчики сбрасываются. Откат: падение после Python
+        3 раза (с пометкой «пропустить») или зависание до Python 4 раза
+        (без пометки — exe не доказал, что битый).
         """
         self._cleanup_leftovers()
         state = _read_json(self.paths.state_file)
         if not state or state.get("phase") != "verifying":
             return state
 
+        prev_booted = bool(state.get("booted"))
+        prev_started = bool(state.get("py_started"))
+        if prev_booted:
+            # прошлый экземпляр поднимал GUI: этот запуск — повторный/ручной,
+            # а не следствие падения обновлённого exe
+            log.info("Прошлый экземпляр обновлённого exe был жив — "
+                     "сбрасываю счётчики неудач (повторный запуск)")
+            state.update(py_started=True, booted=False, fail_count=0, no_boot=0)
+            _write_json_atomic(self.paths.state_file, state)
+            return state
+
+        # этот процесс дошёл до Python — отметим сразу, до долгих проверок
+        state["py_started"] = True
         real = sha256_file(self.paths.exe())
         if state.get("expected_sha256") and real != state["expected_sha256"]:
             self._restore_backup(state, "хеш запущенного exe не совпал")
             return None
-        fail = int(state.get("fail_count") or 0)
-        if fail >= 2:
-            self._restore_backup(state, "приложение падало при запуске после обновления")
-            return None
-        state["fail_count"] = fail + 1
-        _write_json_atomic(self.paths.state_file, state)
+
+        if prev_started:
+            # прошлый процесс поднял Python, но не дошёл до mainloop —
+            # это настоящее падение уже работающего exe
+            fail = int(state.get("fail_count") or 0) + 1
+            state["fail_count"] = fail
+            _write_json_atomic(self.paths.state_file, state)
+            record_history(status="boot_failed", attempt=fail,
+                           to_version=str(state.get("to") or "?"))
+            log.warning("Обновлённый exe упал после старта Python (%d/3)", fail)
+            if fail >= 3:
+                self._restore_backup(
+                    state, "приложение падало при запуске после обновления")
+                return None
+        elif state.get("no_boot") or state.get("fail_count"):
+            # прошлый процесс не дошёл даже до Python: зависшая распаковка
+            # _MEI (антивирус/диск) или «невидимый» старт, убитый пользователем
+            no_boot = int(state.get("no_boot") or 0) + 1
+            state["no_boot"] = no_boot
+            _write_json_atomic(self.paths.state_file, state)
+            log.warning("Прошлый запуск обновлённого exe не дошёл до Python "
+                        "(попытка %d/4)", no_boot)
+            if no_boot >= 4:
+                self._restore_backup(
+                    state, "обновлённый exe не смог запуститься "
+                           "(зависла распаковка или антивирус)", no_boot=True)
+                return None
+        else:
+            # первый запуск после подмены — просто фиксируем, что Python жив
+            _write_json_atomic(self.paths.state_file, state)
         return state
+
+    def mark_booted(self) -> None:
+        """GUI поднялся и mainloop жив — вызвать из главного окна
+        (app.after(...)). Отмечает «живой» признак: смерть процесса после
+        этой отметки не считается падением обновлённого exe."""
+        state = _read_json(self.paths.state_file)
+        if not state or state.get("phase") != "verifying":
+            return
+        if not state.get("booted"):
+            state["booted"] = True
+            _write_json_atomic(self.paths.state_file, state)
+            record_history(status="booted", to_version=str(state.get("to") or "?"))
 
     def finalize_update(self) -> None:
         """Вызвать ПОСЛЕ успешного поднятия GUI — фиксирует успех обновления."""
@@ -659,23 +734,35 @@ class SelfUpdater:
         notify_selfupdate("Обновлятор", f"Обновление до {to_ver} завершено успешно")
 
     # ------------------------------------------------------------------
-    def _restore_backup(self, state: dict, reason: str) -> None:
+    def _restore_backup(self, state: dict, reason: str,
+                        no_boot: bool = False) -> None:
+        """Откат на бэкап. no_boot=True — откат из-за зависшего старта
+        (exe не доказал, что битый): не помечаем версию «пропустить»."""
         backup = Path(str(state.get("backup") or ""))
         to_ver, from_ver = str(state.get("to") or "?"), str(state.get("from") or "?")
-        if backup.exists():
+        if str(backup) not in ("", ".") and backup.exists():
             target = self.paths.exe()
             marker = self.paths.old_marker()
             try:
                 if target.exists():
                     os.rename(target, marker)
                 shutil.copy2(backup, target)
+                try:
+                    # мьютекс у нас (handle_startup_state идёт после
+                    # acquire) — отпустим, иначе перезапущенный бэкап
+                    # увидит «приложение уже запущено»
+                    from core import release_single_instance    # noqa: PLC0415
+                    release_single_instance()
+                except Exception:
+                    log.debug("release_single_instance недоступен", exc_info=True)
                 subprocess.Popen([str(target)], cwd=str(target.parent),
                                  close_fds=True,
                                  creationflags=0x00000008 if IS_WINDOWS else 0)
                 self.paths.state_file.unlink(missing_ok=True)
-                record_history(status="rolled_back", from_version=to_ver,
-                               to_version=from_ver, detail=reason)
-                if self.mark_skip:
+                record_history(
+                    status="rolled_back_no_boot" if no_boot else "rolled_back",
+                    from_version=to_ver, to_version=from_ver, detail=reason)
+                if self.mark_skip and not no_boot:
                     try:
                         self.mark_skip(to_ver)
                     except Exception:
@@ -688,6 +775,13 @@ class SelfUpdater:
                 record_history(status="rollback_error", detail=str(e)[:200])
         else:
             record_history(status="rollback_missing_backup", detail=reason)
+            if self.mark_skip and not no_boot:
+                # помечаем и при несработавшем откате (нет бэкапа) — иначе
+                # авто-проверка зациклится на падающей версии
+                try:
+                    self.mark_skip(to_ver)
+                except Exception:
+                    log.debug("mark_skip не сработал", exc_info=True)
         self.paths.state_file.unlink(missing_ok=True)
 
     def _prune_backups(self) -> None:
