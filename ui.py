@@ -22,7 +22,8 @@ import customtkinter as ctk
 from core import (APP_NAME, APP_VERSION, BASE_DIR, Config, Engine, NoSleep,
                   PackageUpdate, VpnManager, autostart_enabled, enough_space,
                   explain_error, export_settings, import_settings, log,
-                  release_single_instance, run_cmd, set_autostart, winget_exe)
+                  release_single_instance, run_cmd, set_autostart,
+                  winget_exe, winget_uninstall_command)
 import cleanup as cleanup_mod
 import bloat as bloat_mod
 import diag as diag_mod
@@ -1028,6 +1029,7 @@ class App(ctk.CTk):
         for view_id, label in (("updates", "📦  Обновления"),
                                ("cleanup", "🧹  Очистка"),
                                ("bloat", "🗑  Мусор"),
+                               ("uninstall", "♻️  Удаление программ"),
                                ("history", "🕘  История"),
                                ("faq", "❔  FAQ"),
                                ("checks", "🩺  Проверки"),
@@ -1129,6 +1131,7 @@ class App(ctk.CTk):
         for name, builder in (
                 ("cleanup", self._build_cleanup_view),
                 ("bloat", self._build_bloat_view),
+                ("uninstall", self._build_uninstall_view),
                 ("history", self._build_history_view),
                 ("faq", self._build_faq_view),
                 ("checks", self._build_checks_view),
@@ -1560,7 +1563,8 @@ class App(ctk.CTk):
             self.btn_upd_sel.configure(state=state)
             self.btn_upd_all.configure(state=state)
         view = {"updates": self.updates_view, "cleanup": self.cleanup_view,
-                "bloat": self.bloat_view, "history": self.history_view,
+                "bloat": self.bloat_view, "uninstall": self.uninstall_view,
+                "history": self.history_view,
                 "faq": self.faq_view, "checks": self.checks_view,
                 "startup": self.startup_view}[view_id]
         view.tkraise()
@@ -1603,6 +1607,166 @@ class App(ctk.CTk):
     # ======================================================================
     # Раздел «История»
     # ======================================================================
+    # ======================================================================
+    # Раздел «Удаление программ»: весь установленный софт + тихое удаление
+    # ======================================================================
+    def _build_uninstall_view(self) -> None:
+        self.uninstall_view = ctk.CTkFrame(self.views, fg_color="transparent")
+        self.uninstall_view.grid(row=0, column=0, sticky="nsew")
+        self.uninstall_view.grid_rowconfigure(2, weight=1)
+        self.uninstall_view.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(self.uninstall_view, fg_color="transparent")
+        header.grid(row=0, column=0, sticky="ew", padx=16, pady=(14, 6))
+        ctk.CTkLabel(header, text="Удаление программ",
+                     font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w")
+        ctk.CTkLabel(header, text="Все установленные программы из реестра Windows. "
+                                  "Удаление — тихое, через winget: при необходимости "
+                                  "Windows сама запросит права администратора.",
+                     font=ctk.CTkFont(size=11), text_color=MUTED).pack(anchor="w")
+
+        bar = ctk.CTkFrame(self.uninstall_view, fg_color="transparent")
+        bar.grid(row=1, column=0, sticky="ew", padx=16, pady=(0, 4))
+        self.uninstall_search = ctk.CTkEntry(
+            bar, placeholder_text="🔍  Поиск по названию или издателю…", height=30)
+        self.uninstall_search.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.uninstall_search.bind("<KeyRelease>",
+                                   lambda _e: self._rebuild_uninstall_rows())
+        ctk.CTkButton(bar, text="🔄  Перечитать", width=130, height=30,
+                      command=self.on_uninstall_list).pack(side="left")
+
+        self.uninstall_list = ctk.CTkScrollableFrame(self.uninstall_view,
+                                                     fg_color="transparent")
+        self.uninstall_list.grid(row=2, column=0, sticky="nsew", padx=10,
+                                 pady=(4, 10))
+        self._uninstall_apps: list = []            # bloat.InstalledApp
+        self._uninstall_rows: list[ctk.CTkFrame] = []
+        ctk.CTkLabel(self.uninstall_list,
+                     text="Нажмите «🔄 Перечитать», чтобы собрать список "
+                          "установленных программ.",
+                     text_color=FAINT, justify="center").pack(pady=40)
+
+    def on_uninstall_list(self) -> None:
+        """Собрать список установленных программ (реестр Uninstall, быстро)."""
+        if self._tool_busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        self.log("Читаю список установленных программ…", "info")
+
+        def work():
+            try:
+                apps = bloat_mod.list_installed()
+            except Exception as e:                          # noqa: BLE001
+                apps = []
+                self.q.put({"type": "log",
+                            "text": f"Не удалось прочитать реестр: {e}",
+                            "level": "error"})
+            self.q.put({"type": "uninstall_list", "apps": apps})
+
+        threading.Thread(target=work, daemon=True, name="uninstall-list").start()
+
+    def _rebuild_uninstall_rows(self) -> None:
+        for row in self._uninstall_rows:
+            row.destroy()
+        self._uninstall_rows.clear()
+        query = (self.uninstall_search.get() or "").strip().lower()
+        shown = 0
+        for app in self._uninstall_apps:
+            if query and query not in app.name.lower() \
+                    and query not in app.publisher.lower():
+                continue
+            shown += 1
+            row = ctk.CTkFrame(self.uninstall_list, corner_radius=8,
+                               fg_color=CARD_BG)
+            row.pack(fill="x", padx=6, pady=3)
+            self._uninstall_rows.append(row)
+            info = ctk.CTkFrame(row, fg_color="transparent")
+            info.pack(side="left", fill="x", expand=True, padx=(12, 6), pady=4)
+            ctk.CTkLabel(info, text=app.name, anchor="w", justify="left",
+                         font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+            meta = "  ·  ".join(x for x in (
+                f"v{app.version}" if app.version else "",
+                app.publisher,
+                (f"{app.size_kb // 1024} МБ" if app.size_kb >= 1024
+                 else f"{app.size_kb} КБ") if app.size_kb else "",
+            ) if x)
+            ctk.CTkLabel(info, text=meta or " ", anchor="w", justify="left",
+                         font=ctk.CTkFont(size=10), text_color=MUTED).pack(anchor="w")
+            ctk.CTkButton(row, text="🗑  Удалить", width=110, height=26,
+                          fg_color=("#dc2626", "#7f1d1d"),
+                          hover_color=("#b91c1c", "#991b1b"),
+                          command=lambda a=app: self.on_uninstall_app(a)
+                          ).pack(side="right", padx=10, pady=6)
+        if not shown:
+            ctk.CTkLabel(self.uninstall_list,
+                         text="Ничего не найдено" if query
+                         else "Список пуст — нажмите «🔄 Перечитать».",
+                         text_color=FAINT, justify="center").pack(pady=40)
+
+    def on_uninstall_app(self, app) -> None:
+        """Тихое удаление программы через winget (с подтверждением)."""
+        if self._tool_busy or self.engine.busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        if not messagebox.askyesno(
+                APP_NAME, f"Удалить «{app.name}»?\n\n"
+                          "Программа будет удалена с этого компьютера. "
+                          "Действие необратимо."):
+            return
+        cmd = winget_uninstall_command(name=app.name)
+        if cmd is None:
+            messagebox.showerror(APP_NAME, "winget не найден — удалите программу "
+                                           "через Параметры → Приложения.")
+            return
+        self._tool_busy = True
+        self.q.put({"type": "tool_busy", "value": True})
+        self.log(f"Удаляю «{app.name}»…", "info")
+
+        def work():
+            try:
+                rc, out = run_cmd(cmd, timeout=1800)
+            except RuntimeError as e:
+                rc, out = None, str(e)
+            ok = rc == 0
+            tail = "; ".join(out.splitlines()[-2:]) if not ok and out else ""
+            self.q.put({"type": "uninstall_done", "name": app.name, "ok": ok,
+                        "rc": rc, "detail": tail})
+            self.q.put({"type": "tool_busy", "value": False})
+
+        threading.Thread(target=work, daemon=True, name="uninstall-app").start()
+
+    def _uninstall_by_pkg(self, pkg: PackageUpdate) -> None:
+        """Удаление по правому клику на карточке обновления (winget ID)."""
+        if self._tool_busy or self.engine.busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        if not messagebox.askyesno(
+                APP_NAME, f"Удалить «{pkg.name}»?\n\n"
+                          "Программа будет удалена с этого компьютера "
+                          "через winget. Действие необратимо."):
+            return
+        cmd = winget_uninstall_command(pkg_id=pkg.pkg_id)
+        if cmd is None:
+            messagebox.showerror(APP_NAME, "winget не найден — удалите программу "
+                                           "через Параметры → Приложения.")
+            return
+        self._tool_busy = True
+        self.q.put({"type": "tool_busy", "value": True})
+        self.log(f"Удаляю «{pkg.name}»…", "info")
+
+        def work():
+            try:
+                rc, out = run_cmd(cmd, timeout=1800)
+            except RuntimeError as e:
+                rc, out = None, str(e)
+            ok = rc == 0
+            tail = "; ".join(out.splitlines()[-2:]) if not ok and out else ""
+            self.q.put({"type": "uninstall_done", "name": pkg.name, "ok": ok,
+                        "rc": rc, "detail": tail})
+            self.q.put({"type": "tool_busy", "value": False})
+
+        threading.Thread(target=work, daemon=True, name="uninstall-pkg").start()
+
     def _build_faq_view(self) -> None:
         """Раздел «FAQ»: частые вопросы по приложению и настройкам."""
         self.faq_view = ctk.CTkFrame(self.views, fg_color="transparent")
@@ -1670,10 +1834,36 @@ class App(ctk.CTk):
              "в трей, результат придёт уведомлением. Точка восстановления "
              "перед автообновлением создаётся, если включена в настройках."),
             ("Приложение умеет обновлять само себя?",
-             "Да, но пока требуется настройка: публичный репозиторий GitHub и "
-             "ключ подписи (см. selfupdate.py — там пошаговая инструкция). "
-             "Пока репозиторий не указан, кнопка «Обновить сам Обновлятор» в "
-             "трее честно сообщает, что обновлений нет."),
+             "Да, полностью автоматически: Обновлятор сам проверяет релизы на "
+             "GitHub (интервал — в Настройках, канал stable/beta/nightly), "
+             "скачивает обновление с проверкой SHA-256 и подписи манифеста и "
+             "ставит его только с вашего согласия. Если новая версия не смогла "
+             "подняться — приложение автоматически вернётся на предыдущую. "
+             "«Пропустить версию» прячет конкретный релиз из авто-проверок; "
+             "ручная проверка в трее покажет его всё равно."),
+            ("Как удалить ненужную программу?",
+             "Раздел «♻️ Удаление программ» в сайдбаре: полный список "
+             "установленного софта из реестра Windows с поиском. Кнопка "
+             "«🗑 Удалить» тихо удаляет программу через winget — при "
+             "необходимости Windows сама запросит права администратора. Также "
+             "можно кликнуть правой кнопкой по карточке обновления → «🗑 "
+             "Удалить программу». Если программа не поддалась — она останется "
+             "в Параметры → Приложения."),
+            ("Как удалить сам Обновлятор?",
+             "Настройки → «🗑 Удалить Обновлятор»: приложение подготовит "
+             "bat-деинсталлятор, который после закрытия уберёт автозапуск, "
+             "настройки, историю, журналы и файлы программы. Работает на любом "
+             "ПК, Python не нужен. Действие необратимо."),
+            ("pip/npm в exe-сборке не находятся — так и задумано?",
+             "Для pip нужен установленный Python в системе (python.exe или "
+             "py-лаунчер; Microsoft Store-заглушка не считается), для npm — "
+             "Node.js. Если их нет, соответствующий раздел честно "
+             "пропускается, а winget-обновления работают как обычно."),
+            ("Что делает «Режим слабых ПК»?",
+             "Меньше фоновых задач, анимаций и графики — окно отзывчивее на "
+             "ноутбуках. На машинах с 6 ГБ памяти или 4 ядрами и меньше он "
+             "включается автоматически; вручную — в Настройках (применяется "
+             "после перезапуска приложения)."),
             ("Почему поиск пакетов медленный в первый раз?",
              "winget при первом запуске обновляет свои источники — это разовая "
              "задержка в несколько секунд. Последующие сканы быстрее."),
@@ -2696,6 +2886,26 @@ class App(ctk.CTk):
             ev["card"].set_state(ev["state"])
         elif kind == "task_state":
             ev["row"].set_state(ev["state"])
+        elif kind == "uninstall_list":
+            self._uninstall_apps = ev.get("apps") or []
+            self.log(f"Установленных программ: {len(self._uninstall_apps)}",
+                     "info")
+            self._rebuild_uninstall_rows()
+        elif kind == "uninstall_done":
+            ok = bool(ev.get("ok"))
+            name = str(ev.get("name") or "?")
+            if ok:
+                self.log(f"«{name}»: удалено ✔", "ok")
+                history_mod.append("uninstall", name=name, status="ok")
+                # убираем из списка сразу — реестр ARP может обновляться с лагом
+                self._uninstall_apps = [a for a in self._uninstall_apps
+                                        if a.name != name]
+                self._rebuild_uninstall_rows()
+            else:
+                detail = ev.get("detail") or f"код {ev.get('rc')}"
+                self.log(f"«{name}»: не удалось удалить. {detail}. "
+                         "Попробуйте через Параметры → Приложения", "error")
+                history_mod.append("uninstall", name=name, status="error")
         elif kind == "residual_deleted":
             if ev.get("ok"):
                 ev["row"].destroy()
@@ -2801,6 +3011,10 @@ class App(ctk.CTk):
                              command=lambda: self._show_pkg_install_log(pkg))
         menu.add_command(label="ℹ  О пакете",
                          command=lambda: self._on_pkg_info(pkg))
+        if pkg.source == "winget":
+            menu.add_separator()
+            menu.add_command(label="🗑  Удалить программу",
+                             command=lambda: self._uninstall_by_pkg(pkg))
         menu.add_command(label="Копировать ID",
                          command=lambda: self._copy(pkg.pkg_id))
         try:

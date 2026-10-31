@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.7.5.2"
+APP_VERSION = "1.7.5.3"
 
 
 def _resolve_base_dir() -> Path:
@@ -401,6 +401,21 @@ def winget_exe() -> str | None:
         return found
     local = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps" / "winget.exe"
     return str(local) if local.exists() else None
+
+
+def winget_uninstall_command(*, pkg_id: str = "", name: str = "") -> list[str] | None:
+    """Команда тихого удаления через winget; None — winget недоступен.
+
+    pkg_id — ID из карточек обновлений (winget uninstall --id),
+    name — имя из реестра ARP (раздел «Удаление программ»).
+    """
+    exe = winget_exe()
+    if not exe:
+        return None
+    target = ["--id", pkg_id] if pkg_id else ["--name", name]
+    return [exe, "uninstall", *target, "--exact", "--silent",
+            "--accept-package-agreements", "--accept-source-agreements",
+            "--disable-interactivity"]
 
 
 def scan_winget(*, cancel_event: threading.Event | None = None,
