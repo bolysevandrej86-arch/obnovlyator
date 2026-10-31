@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.7.5.1"
+APP_VERSION = "1.7.5.2"
 
 
 def _resolve_base_dir() -> Path:
@@ -424,9 +424,36 @@ def scan_winget(*, cancel_event: threading.Event | None = None,
     return packages
 
 
+def python_args(*extra: str) -> list[str] | None:
+    """Аргументы для запуска python-подкоманд (pip и т.п.).
+
+    В frozen-режиме sys.executable — это сам exe Обновлятора: запуск
+    «Obnovlyator.exe -m pip …» порождал фантомный второй экземпляр
+    приложения (тот 4.5 с ждал мьютекс, показывал окно первого и
+    двигал счётчики самообновления) — вместо pip. Поэтому здесь ищем
+    НАСТОЯЩИЙ интерпретатор в системе (python/python3/py-лаунчер);
+    не нашли — None, pip-раздел честно пропускается.
+    """
+    if not getattr(sys, "frozen", False):
+        return [sys.executable, *extra]
+    for cand in ("python.exe", "python3.exe"):
+        found = shutil.which(cand)
+        # Microsoft Store из WindowsApps — заглушка, а не python
+        if found and "WindowsApps" not in found:
+            return [found, *extra]
+    launcher = shutil.which("py.exe")
+    if launcher:
+        return [launcher, "-3", *extra]
+    return None
+
+
 def scan_pip(*, cancel_event: threading.Event | None = None,
              procs: list | None = None) -> list[PackageUpdate]:
-    args = [sys.executable, "-m", "pip", "list", "--outdated",
+    base = python_args("-m", "pip")
+    if base is None:
+        raise RuntimeError("pip-скан недоступен: в системе не найден "
+                           "установленный Python (python.exe / py)")
+    args = [*base, "list", "--outdated",
             "--format=json", "--disable-pip-version-check"]
     rc, out = run_cmd(args, timeout=600, cancel_event=cancel_event, procs=procs)
     if rc is None:
@@ -474,7 +501,11 @@ def scan_npm(*, cancel_event: threading.Event | None = None,
 
 def upgrade_command(cfg: "Config", pkg: PackageUpdate) -> list | str:
     if pkg.source == "pip":
-        return [sys.executable, "-m", "pip", "install", "--upgrade",
+        base = python_args("-m", "pip")
+        if base is None:
+            raise RuntimeError("Для обновления pip-пакетов нужен "
+                               "установленный Python (python.exe / py)")
+        return [*base, "install", "--upgrade",
                 pkg.pkg_id, "--disable-pip-version-check"]
     if pkg.source == "npm":
         exe = npm_exe() or "npm"

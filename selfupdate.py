@@ -717,10 +717,17 @@ class SelfUpdater:
             record_history(status="booted", to_version=str(state.get("to") or "?"))
 
     def finalize_update(self) -> None:
-        """Вызвать ПОСЛЕ успешного поднятия GUI — фиксирует успех обновления."""
-        state = _read_json(self.paths.state_file) or {}
-        to_ver = state.get("to") or self.current_version
-        from_ver = state.get("from") or "?"
+        """Вызвать ПОСЛЕ успешного поднятия GUI — фиксирует успех обновления.
+
+        Фиксация ровно одна: пока жив state-файл (фаза verifying). Без
+        обновления — тихий выход: раньше каждый запуск приложения писал
+        в историю «обновлено до {текущая версия}» и слал тост.
+        """
+        state = _read_json(self.paths.state_file)
+        if not state:
+            return          # обновления не было — не спамим тостами/историей
+        to_ver = str(state.get("to") or self.current_version)
+        from_ver = str(state.get("from") or "?")
         try:
             self.paths.state_file.unlink(missing_ok=True)
         except OSError:
