@@ -965,6 +965,7 @@ class App(ctk.CTk):
         self.after(1200, self._check_vpn_async)   # фон не мешает старту
         self.after(5000 if self._perf else 1500,
                   self._selfupdate_init)   # фиксация успеха + первая проверка
+        self.after(30000, self._auto_backup_programs)   # суточный бэкап списка
         threading.Thread(target=self._auto_loop, daemon=True, name="auto").start()
         if self.cfg.minimize_to_tray:
             try:
@@ -1634,6 +1635,14 @@ class App(ctk.CTk):
                                    lambda _e: self._rebuild_uninstall_rows())
         ctk.CTkButton(bar, text="🔄  Перечитать", width=130, height=30,
                       command=self.on_uninstall_list).pack(side="left")
+        self.btn_uninstall_sel = ctk.CTkButton(
+            bar, text="🗑  Удалить выбранное", width=180, height=30,
+            fg_color=("#dc2626", "#7f1d1d"), hover_color=("#b91c1c", "#991b1b"),
+            state="disabled", command=self.on_uninstall_selected)
+        self.btn_uninstall_sel.pack(side="left", padx=(8, 0))
+        ctk.CTkButton(bar, text="Снять выделение", width=120, height=30,
+                      fg_color=BTN_GRAY, hover_color=BTN_GRAY_HOVER,
+                      command=self._uninstall_clear_selection).pack(side="left", padx=(8, 0))
 
         self.uninstall_list = ctk.CTkScrollableFrame(self.uninstall_view,
                                                      fg_color="transparent")
@@ -1641,6 +1650,8 @@ class App(ctk.CTk):
                                  pady=(4, 10))
         self._uninstall_apps: list = []            # bloat.InstalledApp
         self._uninstall_rows: list[ctk.CTkFrame] = []
+        self._uninstall_selected: set[str] = set() # имена отмеченных программ
+        self._uninstall_checks: dict[str, ctk.CTkCheckBox] = {}
         ctk.CTkLabel(self.uninstall_list,
                      text="Нажмите «🔄 Перечитать», чтобы собрать список "
                           "установленных программ.",
@@ -1669,6 +1680,7 @@ class App(ctk.CTk):
         for row in self._uninstall_rows:
             row.destroy()
         self._uninstall_rows.clear()
+        self._uninstall_checks.clear()
         query = (self.uninstall_search.get() or "").strip().lower()
         shown = 0
         for app in self._uninstall_apps:
@@ -1680,6 +1692,12 @@ class App(ctk.CTk):
                                fg_color=CARD_BG)
             row.pack(fill="x", padx=6, pady=3)
             self._uninstall_rows.append(row)
+            chk = ctk.CTkCheckBox(row, text="", width=24,
+                                  command=lambda a=app: self._uninstall_toggle(a))
+            if app.name in self._uninstall_selected:
+                chk.select()
+            chk.pack(side="left", padx=(10, 2))
+            self._uninstall_checks[app.name] = chk
             info = ctk.CTkFrame(row, fg_color="transparent")
             info.pack(side="left", fill="x", expand=True, padx=(12, 6), pady=4)
             ctk.CTkLabel(info, text=app.name, anchor="w", justify="left",
@@ -1702,6 +1720,67 @@ class App(ctk.CTk):
                          text="Ничего не найдено" if query
                          else "Список пуст — нажмите «🔄 Перечитать».",
                          text_color=FAINT, justify="center").pack(pady=40)
+
+    def _uninstall_toggle(self, app) -> None:
+        key = app.name
+        if key in self._uninstall_selected:
+            self._uninstall_selected.discard(key)
+        else:
+            self._uninstall_selected.add(key)
+        self._update_uninstall_buttons()
+
+    def _uninstall_clear_selection(self) -> None:
+        self._uninstall_selected.clear()
+        for chk in self._uninstall_checks.values():
+            chk.deselect()
+        self._update_uninstall_buttons()
+
+    def _update_uninstall_buttons(self) -> None:
+        names = {a.name for a in self._uninstall_apps}
+        n = len(self._uninstall_selected & names)
+        self.btn_uninstall_sel.configure(
+            text=f"🗑  Удалить выбранное ({n})" if n else "🗑  Удалить выбранное",
+            state="normal" if n else "disabled")
+
+    def on_uninstall_selected(self) -> None:
+        """Очередное удаление всех отмеченных программ (одно подтверждение)."""
+        if self._tool_busy or self.engine.busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        apps = [a for a in self._uninstall_apps
+                if a.name in self._uninstall_selected]
+        if not apps:
+            self.log("Ничего не выбрано", "warning")
+            return
+        names = "\n".join(f"•  {a.name}" for a in apps[:8])
+        more = f"\n…и ещё {len(apps) - 8}" if len(apps) > 8 else ""
+        if not messagebox.askyesno(
+                APP_NAME, f"Удалить программы ({len(apps)} шт.)?\n\n{names}{more}\n\n"
+                          "Удаление пойдёт по очереди, через winget. "
+                          "Действие необратимо."):
+            return
+        if winget_uninstall_command(name="") is None:
+            messagebox.showerror(APP_NAME, "winget не найден — удалите программы "
+                                           "через Параметры → Приложения.")
+            return
+        self._tool_busy = True
+        self.q.put({"type": "tool_busy", "value": True})
+        self._uninstall_selected.clear()
+        self.log(f"Удаляю выбранные программы ({len(apps)} шт.) по очереди…", "info")
+
+        def work():
+            for a in apps:
+                try:
+                    rc, out = run_cmd(winget_uninstall_command(name=a.name),
+                                      timeout=1800)
+                except RuntimeError as e:
+                    rc, out = None, str(e)
+                tail = "; ".join(out.splitlines()[-2:]) if rc != 0 and out else ""
+                self.q.put({"type": "uninstall_done", "name": a.name,
+                            "ok": rc == 0, "rc": rc, "detail": tail})
+            self.q.put({"type": "tool_busy", "value": False})
+
+        threading.Thread(target=work, daemon=True, name="uninstall-multi").start()
 
     def on_uninstall_app(self, app) -> None:
         """Тихое удаление программы через winget (с подтверждением)."""
@@ -2079,6 +2158,11 @@ class App(ctk.CTk):
                                       font=ctk.CTkFont(size=13), text_color=MUTED,
                                       wraplength=900, justify="left")
         self.stats_lbl.pack(fill="x", pady=(6, 0))
+        self.history_filter = ctk.CTkSegmentedButton(
+            header, values=["Все", "Обновления", "Очистка", "Удаление", "Приложение"],
+            command=lambda _v: self._refresh_history())
+        self.history_filter.set("Все")
+        self.history_filter.pack(fill="x", pady=(6, 0))
 
         # --- график активности по дням (14 дней, чистый tk.Canvas без matplotlib)
         self.history_chart = HistoryChart(self.history_view, height=130)
@@ -2131,9 +2215,20 @@ class App(ctk.CTk):
                 w.destroy()
         rows = history_mod.read(limit=150)
         rows.reverse()  # свежие сверху
+        flt = self.history_filter.get()
+        if flt == "Обновления":
+            rows = [r for r in rows if r.get("kind") == "update"]
+        elif flt == "Очистка":
+            rows = [r for r in rows if r.get("kind") == "cleanup"]
+        elif flt == "Удаление":
+            rows = [r for r in rows if r.get("kind") == "uninstall"]
+        elif flt == "Приложение":
+            rows = [r for r in rows if r.get("kind") not in
+                    ("update", "cleanup", "uninstall")]
         if not rows:
-            self.history_empty.configure(text="История пока пуста.\n"
-                                              "Здесь появятся обновления, очистки и удаления.")
+            self.history_empty.configure(
+                text="Нет записей этого типа." if flt != "Все"
+                else "История пока пуста.\nЗдесь появятся обновления, очистки и удаления.")
             self.history_empty.pack(pady=60)
             return
         for row in rows:
@@ -2550,6 +2645,48 @@ class App(ctk.CTk):
         if hours > 0:
             self.after(int(hours * 3600 * 1000), self._selfupdate_check, False)
 
+    def _auto_backup_programs(self) -> None:
+        """Раз в сутки сохраняет список установленных программ (winget export)
+        в backups\\ рядом с приложением: после переустановки Windows весь
+        софт вернётся одним «📥 Установить из бэкапа»."""
+        if self._closing:
+            return
+        self.after(6 * 3600_000, self._auto_backup_programs)  # перепроверка
+
+        def work():
+            try:
+                exe = winget_exe()
+                if not exe:
+                    return
+                bdir = BASE_DIR / "backups"
+                try:
+                    bdir.mkdir(exist_ok=True)
+                except OSError:
+                    return                      # папка недоступна для записи
+                path = bdir / f"programs_{time.strftime('%Y-%m-%d')}.json"
+                if path.exists():
+                    return                      # сегодня уже сохраняли
+                rc, _out = run_cmd(
+                    [exe, "export", "-o", str(path), "--accept-source-agreements"],
+                    timeout=300)
+                if rc != 0:
+                    path.unlink(missing_ok=True)
+                    return
+                olds = sorted(bdir.glob("programs_*.json"))
+                for old in olds[:-4]:           # храним последние 4
+                    try:
+                        old.unlink()
+                    except OSError:
+                        pass
+                self.q.put({"type": "log",
+                            "text": f"Список программ сохранён в бэкап: "
+                                    f"{path.name} (годится для winget import)",
+                            "level": "info"})
+            except Exception:                            # noqa: BLE001
+                log.debug("Автобэкап списка программ не удался", exc_info=True)
+
+        threading.Thread(target=work, daemon=True, name="backup-programs").start()
+
     def tray_check_selfupdate(self) -> None:
         if self.selfup is None:          # клик по трее до инициализации (первые 1,5 с)
             self.selfup = selfupdate.create_updater(self.cfg, APP_VERSION)
@@ -2900,6 +3037,7 @@ class App(ctk.CTk):
                 # убираем из списка сразу — реестр ARP может обновляться с лагом
                 self._uninstall_apps = [a for a in self._uninstall_apps
                                         if a.name != name]
+                self._uninstall_selected.discard(name)
                 self._rebuild_uninstall_rows()
             else:
                 detail = ev.get("detail") or f"код {ev.get('rc')}"
@@ -2929,7 +3067,7 @@ class App(ctk.CTk):
     # ======================================================================
     # Действия
     # ======================================================================
-    def on_scan(self) -> None:
+    def on_scan(self, force: bool = True) -> None:
         if self.engine.busy:
             return
         if self._tool_busy:
@@ -2937,7 +3075,7 @@ class App(ctk.CTk):
             return
         self.progress.configure(mode="indeterminate")
         self.progress.start()
-        self.engine.start_scan()
+        self.engine.start_scan(force=force)
 
     def on_update_selected(self) -> None:
         if self.engine.busy:
@@ -3345,10 +3483,10 @@ class App(ctk.CTk):
             if self.cfg.auto_update_all:
                 self.on_update_all()
             else:
-                self.on_scan()
+                self.on_scan(force=False)   # кэш свежего скана допустим
         else:
             self._auto_pending = True
-            self.on_scan()
+            self.on_scan(force=False)
 
     # ======================================================================
     # Завершение

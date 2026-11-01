@@ -138,6 +138,26 @@ def list_installed() -> list[InstalledApp]:
                         apps.append(app)
                 except OSError:
                     continue
+    # дубли x86/x64 одного приложения: склеиваем по имени, оставляя самую
+    # содержательную запись и дозаполняя её пустые поля из остальных
+    merged: dict[str, InstalledApp] = {}
+    for app in apps:
+        key = app.name.lower()
+        best = merged.get(key)
+        if best is None:
+            merged[key] = app
+            continue
+        better = ((bool(app.uninstall_string), app.size_kb, app.version or "")
+                  > (bool(best.uninstall_string), best.size_kb, best.version or ""))
+        winner, loser = (app, best) if better else (best, app)
+        winner.version = winner.version or loser.version
+        winner.publisher = winner.publisher or loser.publisher
+        winner.uninstall_string = winner.uninstall_string or loser.uninstall_string
+        winner.install_date = winner.install_date or loser.install_date
+        winner.size_kb = max(winner.size_kb, loser.size_kb)
+        merged[key] = winner
+    apps = list(merged.values())
+
     apps.sort(key=lambda a: a.name.lower())
     return apps
 

@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.7.5.3"
+APP_VERSION = "1.7.5.4"
 
 
 def _resolve_base_dir() -> Path:
@@ -1117,6 +1117,7 @@ class Engine:
         self._cancel = threading.Event()
         self._procs: list[subprocess.Popen] = []
         self._busy = False
+        self._last_scan: tuple[float, list[PackageUpdate]] | None = None
 
     # -- служебное -------------------------------------------------------
     @property
@@ -1174,9 +1175,21 @@ class Engine:
         return rc, out
 
     # -- сканирование ----------------------------------------------------
-    def start_scan(self, include_pip: bool | None = None) -> None:
+    SCAN_CACHE_SEC = 180.0      # повторные сканы в этот срок не гоняют winget
+
+    def start_scan(self, include_pip: bool | None = None,
+                   force: bool = False) -> None:
         if include_pip is None:
             include_pip = self.cfg.update_pip
+        # свежий кэш скана: повторные запросы не гоняют winget заново
+        if (not force and self._last_scan is not None
+                and time.time() - self._last_scan[0] < self.SCAN_CACHE_SEC):
+            age = int(time.time() - self._last_scan[0])
+            self.log(f"Результат скана сделан {age} с назад — переиспользую его "
+                     "(принудительный скан: кнопка «Проверить обновления» или F5)",
+                     "info")
+            self._emit_scan_result(list(self._last_scan[1]))
+            return
         self._spawn(lambda: self._scan_worker(include_pip))
 
     def _scan_worker(self, include_pip: bool) -> None:
@@ -1209,6 +1222,10 @@ class Engine:
             self.log(f"По правилам пропущено пакетов: {len(packages) - len(kept)}", "info")
         packages = kept
 
+        self._last_scan = (time.time(), list(packages))
+        self._emit_scan_result(packages)
+
+    def _emit_scan_result(self, packages: list[PackageUpdate]) -> None:
         self.packages = {p.key: p for p in packages}
         via_vpn = sum(1 for p in packages if self.cfg.category_of(p.key) == "vpn")
         self.log(f"Найдено обновлений: {len(packages)} (из них через VPN: {via_vpn})",
