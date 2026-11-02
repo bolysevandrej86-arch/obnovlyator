@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Зависимости
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Компиляция всех модулей
+        run: python -m py_compile main.py core.py ui.py selfupdate.py cleanup.py bloat.py diag.py history.py startup.py tray.py
+
+      - name: Юнит-тесты
+        run: python -m pytest tests -v
+
+      - name: Smoke (окно собирается скрыто)
+        run: python main.py --smoke

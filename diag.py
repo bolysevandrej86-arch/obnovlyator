@@ -401,3 +401,34 @@ def app_integrity(cfg) -> dict:
             f"следующего запуска проверки.\nSHA256 сейчас: {short}",
             "details": ["Эталон: " + stored[:16] + "…",
                         "Сейчас: " + current[:16] + "…"]}
+
+
+# ---------------------------------------------------------------------------
+# winget: источники пакетов
+# ---------------------------------------------------------------------------
+
+def repair_winget_sources() -> dict:
+    """Сброс источников winget к заводским + обновление индексов.
+
+    Лечит частую причину «ошибка winget или установщика пакета»: битый
+    или недоступный источник (msstore/winget). Команды:
+        winget source reset --force
+        winget source update
+    """
+    from core import winget_exe
+    exe = winget_exe()
+    if not exe:
+        return {"status": "error", "text": "winget не найден на этом ПК",
+                "details": []}
+    rc, out = run_cmd([exe, "source", "reset", "--force"], timeout=180)
+    if rc != 0:
+        return {"status": "error",
+                "text": f"winget source reset вернул код {rc}",
+                "details": _last_lines(out, 6)}
+    rc2, out2 = run_cmd([exe, "source", "update"], timeout=300)
+    text = ("Источники winget сброшены к заводским и обновлены" if rc2 == 0
+            else "Источники сброшены, но обновить индексы не удалось "
+                 "(повторите позже или проверьте сеть)")
+    details = _last_lines(out, 4) + _last_lines(out2, 4)
+    return {"status": "ok" if rc2 == 0 else "warn", "text": text,
+            "details": details}

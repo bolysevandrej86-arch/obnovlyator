@@ -1702,14 +1702,18 @@ class App(ctk.CTk):
             info.pack(side="left", fill="x", expand=True, padx=(12, 6), pady=4)
             ctk.CTkLabel(info, text=app.name, anchor="w", justify="left",
                          font=ctk.CTkFont(size=12, weight="bold")).pack(anchor="w")
+            pr = bloat_mod.protection_reason(app.name)
             meta = "  ·  ".join(x for x in (
                 f"v{app.version}" if app.version else "",
                 app.publisher,
                 (f"{app.size_kb // 1024} МБ" if app.size_kb >= 1024
                  else f"{app.size_kb} КБ") if app.size_kb else "",
+                f"⚠ {pr}" if pr else "",
             ) if x)
             ctk.CTkLabel(info, text=meta or " ", anchor="w", justify="left",
-                         font=ctk.CTkFont(size=10), text_color=MUTED).pack(anchor="w")
+                         font=ctk.CTkFont(size=10),
+                         text_color=("#b45309", "#fbbf24") if pr else MUTED
+                         ).pack(anchor="w")
             ctk.CTkButton(row, text="🗑  Удалить", width=110, height=26,
                           fg_color=("#dc2626", "#7f1d1d"),
                           hover_color=("#b91c1c", "#991b1b"),
@@ -1759,6 +1763,19 @@ class App(ctk.CTk):
                           "Удаление пойдёт по очереди, через winget. "
                           "Действие необратимо."):
             return
+        protected = [(a, bloat_mod.protection_reason(a.name)) for a in apps]
+        protected = [(a, pr) for a, pr in protected if pr]
+        if protected:
+            lst = "\n".join(f"⚠  {a.name} — {pr}" for a, pr in protected[:6])
+            more_p = (f"\n…и ещё {len(protected) - 6}"
+                      if len(protected) > 6 else "")
+            if not messagebox.askyesno(
+                    APP_NAME, f"В выбранных есть важные системные компоненты "
+                              f"({len(protected)} шт.):\n\n{lst}{more_p}\n\n"
+                              "После их удаления Windows или другие программы "
+                              "могут работать нестабильно.\n\n"
+                              "Продолжить удаление?"):
+                return
         if winget_uninstall_command(name="") is None:
             messagebox.showerror(APP_NAME, "winget не найден — удалите программы "
                                            "через Параметры → Приложения.")
@@ -1792,6 +1809,13 @@ class App(ctk.CTk):
                           "Программа будет удалена с этого компьютера. "
                           "Действие необратимо."):
             return
+        pr = bloat_mod.protection_reason(app.name)
+        if pr and not messagebox.askyesno(
+                APP_NAME, f"⚠️  Это важный компонент: {pr}.\n\n"
+                          f"«{app.name}» после удаления может нарушить работу "
+                          "Windows или других программ.\n\n"
+                          "Точно удалить?"):
+            return
         cmd = winget_uninstall_command(name=app.name)
         if cmd is None:
             messagebox.showerror(APP_NAME, "winget не найден — удалите программу "
@@ -1823,6 +1847,13 @@ class App(ctk.CTk):
                 APP_NAME, f"Удалить «{pkg.name}»?\n\n"
                           "Программа будет удалена с этого компьютера "
                           "через winget. Действие необратимо."):
+            return
+        pr = bloat_mod.protection_reason(pkg.name)
+        if pr and not messagebox.askyesno(
+                APP_NAME, f"⚠️  Это важный компонент: {pr}.\n\n"
+                          f"«{pkg.name}» после удаления может нарушить работу "
+                          "Windows или других программ.\n\n"
+                          "Точно удалить?"):
             return
         cmd = winget_uninstall_command(pkg_id=pkg.pkg_id)
         if cmd is None:
@@ -1928,6 +1959,13 @@ class App(ctk.CTk):
              "можно кликнуть правой кнопкой по карточке обновления → «🗑 "
              "Удалить программу». Если программа не поддалась — она останется "
              "в Параметры → Приложения."),
+            ("Почему некоторые программы помечены «⚠» и удаляются с лишним "
+             "вопросом?",
+             "Так помечены важные компоненты: антивирусы, системные рантаймы "
+             "(Visual C++, .NET), драйверы устройств, VPN-клиенты. Их удаление "
+             "может нарушить работу Windows или других программ, поэтому "
+             "приложение показывает второе подтверждение с объяснением. "
+             "Удалить их можно — решение за вами."),
             ("Как удалить сам Обновлятор?",
              "Настройки → «🗑 Удалить Обновлятор»: приложение подготовит "
              "bat-деинсталлятор, который после закрытия уберёт автозапуск, "
@@ -1974,7 +2012,8 @@ class App(ctk.CTk):
                      font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w")
         ctk.CTkLabel(header, text="Целостность Windows и Обновлятора, драйверы, "
                                   "диски. Ничего не исправляет и не удаляет — "
-                                  "только диагностика.",
+                                  "только диагностика (кроме кнопки починки "
+                                  "источников winget).",
                      font=ctk.CTkFont(size=11), text_color=MUTED).pack(anchor="w")
 
         scroll = ctk.CTkScrollableFrame(self.checks_view, fg_color="transparent")
@@ -1998,6 +2037,11 @@ class App(ctk.CTk):
              "Статус здоровья физических дисков и свободное место на томах. "
              "Быстро.",
              [("▶  Проверить", lambda: self._run_check("disks", 1.0))]),
+            ("winget_src", "winget: источники пакетов",
+             "Если обновления валятся с «ошибка winget или установщика» — "
+             "сброс источников к заводским и обновление индексов "
+             "(winget source reset --force + source update). Быстро.",
+             [("🛠  Починить", lambda: self._run_check("winget_src", 1.0))]),
             ("dism", "Система: хранилище компонентов",
              "Быстрая проверка DISM. " + admin_note + ".",
              [("▶  Проверить", lambda: self._run_check("dism", 1.0))]),
@@ -2075,6 +2119,7 @@ class App(ctk.CTk):
             "drivers_install": lambda: diag_mod.driver_install(
                 is_admin=self.is_admin),
             "disks": diag_mod.disk_health,
+            "winget_src": diag_mod.repair_winget_sources,
             "dism": lambda: diag_mod.dism_checkhealth(self.is_admin),
             "sfc": diag_mod.sfc_verifyonly,
             "chkdsk": diag_mod.chkdsk_scan,

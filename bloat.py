@@ -87,6 +87,78 @@ def match_bloat(name: str) -> str:
     return ""
 
 
+# Важные компоненты: их удаление может сломать Windows или другие программы.
+# Не запрет, а «двойное подтверждение» — отметка ⚠ в списке и лишний диалог.
+PROTECTED_PATTERNS: list[tuple[str, str]] = [
+    # защита
+    ("windows defender", "встроенная защита Windows"),
+    ("microsoft defender", "встроенная защита Windows"),
+    ("antivirus", "антивирус"),
+    ("антивирус", "антивирус"),
+    ("kaspersky", "антивирус"),
+    ("dr.web", "антивирус"),
+    ("drweb", "антивирус"),
+    ("eset", "антивирус"),
+    ("nod32", "антивирус"),
+    ("avast", "антивирус"),
+    ("avg ", "антивирус"),
+    ("bitdefender", "антивирус"),
+    ("malwarebytes", "антивирус"),
+    ("360 total", "антивирус"),
+    # системные рантаймы и компоненты
+    ("visual c++", "системный рантайм (библиотеки C++)"),
+    ("directx", "системный компонент (графика)"),
+    (".net", "системный рантайм (.NET)"),
+    ("edge webview", "системный компонент (WebView2)"),
+    ("microsoft edge", "браузер Windows"),
+    ("microsoft store", "магазин Windows"),
+    ("windows installer", "системный компонент (установщик Windows)"),
+    ("desktop app installer", "сам winget (App Installer)"),
+    # драйверы и железо
+    ("driver", "драйвер устройства"),
+    ("драйвер", "драйвер устройства"),
+    ("bluetooth", "драйвер устройства"),
+    ("wireless", "драйвер устройства"),
+    ("wi-fi", "драйвер устройства"),
+    ("graphics", "графический драйвер"),
+    ("chipset", "драйвер устройства"),
+    ("geforce", "графический драйвер NVIDIA"),
+    ("radeon", "графический драйвер AMD"),
+    ("vpn", "VPN-клиент"),
+]
+
+
+def protection_reason(name: str) -> str:
+    """Причина «важности» программы или "" — если можно удалять спокойно."""
+    low = name.lower()
+    for pattern, reason in PROTECTED_PATTERNS:
+        if pattern in low:
+            return reason
+    return ""
+
+
+def merge_duplicates(apps: list[InstalledApp]) -> list[InstalledApp]:
+    """Склеивает дубли x86/x64 одного приложения: оставляет самую
+    содержательную запись и дозаполняет её пустые поля из остальных."""
+    merged: dict[str, InstalledApp] = {}
+    for app in apps:
+        key = app.name.lower()
+        best = merged.get(key)
+        if best is None:
+            merged[key] = app
+            continue
+        better = ((bool(app.uninstall_string), app.size_kb, app.version or "")
+                  > (bool(best.uninstall_string), best.size_kb, best.version or ""))
+        winner, loser = (app, best) if better else (best, app)
+        winner.version = winner.version or loser.version
+        winner.publisher = winner.publisher or loser.publisher
+        winner.uninstall_string = winner.uninstall_string or loser.uninstall_string
+        winner.install_date = winner.install_date or loser.install_date
+        winner.size_kb = max(winner.size_kb, loser.size_kb)
+        merged[key] = winner
+    return list(merged.values())
+
+
 def list_installed() -> list[InstalledApp]:
     """Все установленные программы из разделов Uninstall (3 куста)."""
     apps: list[InstalledApp] = []
@@ -138,25 +210,7 @@ def list_installed() -> list[InstalledApp]:
                         apps.append(app)
                 except OSError:
                     continue
-    # дубли x86/x64 одного приложения: склеиваем по имени, оставляя самую
-    # содержательную запись и дозаполняя её пустые поля из остальных
-    merged: dict[str, InstalledApp] = {}
-    for app in apps:
-        key = app.name.lower()
-        best = merged.get(key)
-        if best is None:
-            merged[key] = app
-            continue
-        better = ((bool(app.uninstall_string), app.size_kb, app.version or "")
-                  > (bool(best.uninstall_string), best.size_kb, best.version or ""))
-        winner, loser = (app, best) if better else (best, app)
-        winner.version = winner.version or loser.version
-        winner.publisher = winner.publisher or loser.publisher
-        winner.uninstall_string = winner.uninstall_string or loser.uninstall_string
-        winner.install_date = winner.install_date or loser.install_date
-        winner.size_kb = max(winner.size_kb, loser.size_kb)
-        merged[key] = winner
-    apps = list(merged.values())
+    apps = merge_duplicates(apps)
 
     apps.sort(key=lambda a: a.name.lower())
     return apps
