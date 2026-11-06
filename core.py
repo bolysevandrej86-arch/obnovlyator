@@ -26,7 +26,7 @@ from pathlib import Path
 import history
 
 APP_NAME = "Обновлятор"
-APP_VERSION = "1.7.5.5"
+APP_VERSION = "1.7.6"
 
 
 def _resolve_base_dir() -> Path:
@@ -282,7 +282,20 @@ def parse_winget_table(text: str) -> list[PackageUpdate]:
         name, pkg_id, version, available, source = cols[:5]
         # Идентификатор — «якорь» строки: без валидного Id считаем таблицу
         # законченной (ниже идут итоговые строки вроде «Доступны обновления: N»)
-        if not pkg_id or pkg_id == "..." or not _ID_RE.match(pkg_id):
+        if not pkg_id or pkg_id == "...":
+            break
+        if pkg_id.startswith("MSIX\\"):
+            # Store/MSIX-приложение (Paint, Почта, Web Experience Pack…):
+            # версия может отсутствовать в таблице — без неё карточку
+            # не из чего строить, пропускаем
+            if not version or version == "?":
+                continue
+            packages.append(PackageUpdate(
+                source="msstore", pkg_id=pkg_id,
+                name=name or pkg_id, version=version,
+                available=available or "?"))
+            continue
+        if not _ID_RE.match(pkg_id):
             break
         packages.append(PackageUpdate(
             source=source or "winget",
@@ -525,6 +538,12 @@ def upgrade_command(cfg: "Config", pkg: PackageUpdate) -> list | str:
     if pkg.source == "npm":
         exe = npm_exe() or "npm"
         return [exe, "install", "-g", f"{pkg.pkg_id}@{pkg.available}"]
+    if pkg.source == "msstore":
+        # Store/MSIX-приложение: обновление по полному идентификатору MSIX
+        exe = winget_exe() or "winget"
+        return [exe, "upgrade", "--id", pkg.pkg_id, "--silent",
+                "--accept-package-agreements", "--accept-source-agreements",
+                "--disable-interactivity"]
     exe = winget_exe() or "winget"
     cmd = [exe, "upgrade", "--id", pkg.pkg_id, "--exact", "--silent",
            "--accept-package-agreements", "--accept-source-agreements",
@@ -580,6 +599,7 @@ class Config:
     winget_extra_args: str = ""      # доп. аргументы winget, напр. --scope user
     update_pip: bool = False         # обновлять ли pip-пакеты
     update_npm: bool = False         # обновлять ли глобальные npm-пакеты
+    update_store: bool = True        # обновлять ли UWP/Store-приложения (Paint и т.п.)
     auto_interval_hours: float = 0.0 # автопроверка каждые N часов (0 = выкл)
     auto_update_all: bool = False    # при автопроверке сразу обновлять всё
     start_with_windows: bool = False # автозапуск приложения
@@ -1339,6 +1359,22 @@ class Engine:
         self.log(f"Готово. Обновлено: {ok}, ошибки: {fail}, пропущено: {skip}"
                  + (" (остановлено)" if cancelled else ""),
                  "ok" if fail == 0 and not cancelled else "warning")
+
+        # Microsoft Store: UWP-приложения (Paint, Почта, Web Experience Pack…)
+        # живут вне winget — их обновляет сам Store по принудительному скану.
+        if self.cfg.update_store and not cancelled:
+            self.emit(type="phase", text="Microsoft Store: проверка обновлений…")
+            try:
+                from diag import store_update_scan     # noqa: PLC0415 (цикл импортов)
+                res = store_update_scan()
+                lvl = {"ok": "ok", "info": "warning"}.get(res["status"], "error")
+                self.log(f"Microsoft Store: {res['text']}", lvl)
+            except Exception as e:                     # noqa: BLE001
+                log.debug("Store-скан не удался", exc_info=True)
+                self.log(f"Microsoft Store: не удалось проверить обновления ({e})",
+                         "warning")
+            self.emit(type="phase", text="")
+
         self.emit(type="finished", ok=ok, fail=fail, skip=skip, cancelled=cancelled)
 
     def _upgrade_one(self, pkg: PackageUpdate) -> str:

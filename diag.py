@@ -432,3 +432,40 @@ def repair_winget_sources() -> dict:
     details = _last_lines(out, 4) + _last_lines(out2, 4)
     return {"status": "ok" if rc2 == 0 else "warn", "text": text,
             "details": details}
+
+
+# ---------------------------------------------------------------------------
+# Microsoft Store: UWP-приложения
+# ---------------------------------------------------------------------------
+
+def store_update_scan() -> dict:
+    """Принудительная проверка и установка обновлений Microsoft Store.
+
+    UWP/Store-приложения (Paint, Почта и Календарь, Web Experience Pack,
+    драйверные расширения и т.д.) живут вне winget — их обновляет сам Store.
+    Запуск скана через MDM-мост (UpdateScanMethod) заставляет Store прямо
+    сейчас проверить каталог и установить всё новое в фоне.
+
+    Нужны права администратора: без них MDM-мост отвечает «Отказано в доступе».
+    """
+    if not is_admin_elevated():
+        return {"status": "info",
+                "text": "Для проверки обновлений Store нужны права "
+                        "администратора — нажмите 🔑 в сайдбаре.",
+                "details": []}
+    script = (r"$r = Get-CimInstance -Namespace 'Root\cimv2\mdm\dmmap' "
+              r"-ClassName 'MDM_EnterpriseModernAppManagement_AppManagement01' "
+              r"-ErrorAction Stop | Invoke-CimMethod -MethodName UpdateScanMethod; "
+              r"if ($r.ReturnValue -eq 0) { 'SCAN_OK' } "
+              r"else { 'SCAN_ERR ' + $r.ReturnValue }")
+    rc, out = _ps(script, timeout=120)
+    if "SCAN_OK" in out:
+        return {"status": "ok",
+                "text": "Store проверяет обновления приложений — новые версии "
+                        "(Paint и другие) установятся сами в ближайшие минуты",
+                "details": _last_lines(out, 3)}
+    detail = next((l for l in _last_lines(out, 5) if "SCAN_ERR" in l),
+                  f"код {rc}")
+    return {"status": "error",
+            "text": f"Store не запустил проверку обновлений ({detail})",
+            "details": _last_lines(out, 5)}

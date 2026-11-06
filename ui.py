@@ -522,6 +522,10 @@ class SettingsWindow(ctk.CTkToplevel):
                                    self.cfg.update_pip)
         self.sw_npm = self._switch(scroll, "Также обновлять глобальные npm-пакеты (Node.js)",
                                    self.cfg.update_npm)
+        self.sw_store = self._switch(
+            scroll, "Обновлять приложения Microsoft Store (Paint, Почта, "
+                    "кодеки — после каждой сессии обновлений)",
+            getattr(self.cfg, "update_store", True))
         self.e_interval = self._row(scroll, "Автопроверка каждые N часов (0 — выключена)",
                                     str(self.cfg.auto_interval_hours))
         self.sw_autoall = self._switch(scroll, "При автопроверке сразу обновлять всё",
@@ -817,6 +821,7 @@ class SettingsWindow(ctk.CTkToplevel):
         cfg.winget_extra_args = self._entry(self.e_extra)
         cfg.update_pip = bool(self.sw_pip.var.get())
         cfg.update_npm = bool(self.sw_npm.var.get())
+        cfg.update_store = bool(self.sw_store.var.get())
         cfg.auto_interval_hours = self._float(self.e_interval, 0.0, 0.0)
         cfg.auto_update_all = bool(self.sw_autoall.var.get())
         cfg.night_mode = bool(self.sw_night.var.get())
@@ -1877,6 +1882,39 @@ class App(ctk.CTk):
 
         threading.Thread(target=work, daemon=True, name="uninstall-pkg").start()
 
+    def _uninstall_store_pkg(self, pkg: PackageUpdate) -> None:
+        """Удаление Store/MSIX-приложения (Remove-AppxPackage)."""
+        if self._tool_busy or self.engine.busy:
+            self.log("Дождитесь завершения текущей операции", "warning")
+            return
+        fullname = pkg.pkg_id.split("MSIX\\", 1)[-1]
+        if not messagebox.askyesno(
+                APP_NAME, f"Удалить «{pkg.name}»?\n\n"
+                          "Приложение Microsoft Store будет удалено "
+                          "(Remove-AppxPackage). Действие необратимо."):
+            return
+        pr = bloat_mod.protection_reason(pkg.name)
+        if pr and not messagebox.askyesno(
+                APP_NAME, f"⚠️  Это важный компонент: {pr}.\n\n"
+                          f"«{pkg.name}» после удаления может нарушить работу "
+                          "Windows или других программ.\n\n"
+                          "Точно удалить?"):
+            return
+        self._tool_busy = True
+        self.q.put({"type": "tool_busy", "value": True})
+        self.log(f"Удаляю «{pkg.name}» (Store)…", "info")
+
+        def work():
+            try:
+                ok, msg = bloat_mod.uninstall_appx(fullname)
+            except Exception as e:                          # noqa: BLE001
+                ok, msg = False, str(e)
+            self.q.put({"type": "uninstall_done", "name": pkg.name, "ok": ok,
+                        "rc": 0 if ok else 1, "detail": msg})
+            self.q.put({"type": "tool_busy", "value": False})
+
+        threading.Thread(target=work, daemon=True, name="uninstall-store").start()
+
     def _build_faq_view(self) -> None:
         """Раздел «FAQ»: частые вопросы по приложению и настройкам."""
         self.faq_view = ctk.CTkFrame(self.views, fg_color="transparent")
@@ -1976,6 +2014,16 @@ class App(ctk.CTk):
              "py-лаунчер; Microsoft Store-заглушка не считается), для npm — "
              "Node.js. Если их нет, соответствующий раздел честно "
              "пропускается, а winget-обновления работают как обычно."),
+            ("Почему Paint и другие приложения Store не появляются в списке?",
+             "UWP-приложения из Microsoft Store (Paint, Почта, кодеки, Web "
+             "Experience Pack) обновляет не winget, а сам Store — каталога "
+             "их версий у winget нет. Поэтому после каждой сессии обновлений "
+             "Обновлятор запускает принудительную проверку обновлений Store "
+             "(если включено в Настройках), и Store сам ставит всё новое в "
+             "фоне. Разово: «🩺 Проверки» → «Microsoft Store: приложения» → "
+             "«🔄 Проверить Store» (нужны права администратора). Если "
+             "Store-обновления валятся с «ошибка winget» — сначала «🛠 "
+             "Починить» источники winget."),
             ("Что делает «Режим слабых ПК»?",
              "Меньше фоновых задач, анимаций и графики — окно отзывчивее на "
              "ноутбуках. На машинах с 6 ГБ памяти или 4 ядрами и меньше он "
@@ -2037,6 +2085,14 @@ class App(ctk.CTk):
              "Статус здоровья физических дисков и свободное место на томах. "
              "Быстро.",
              [("▶  Проверить", lambda: self._run_check("disks", 1.0))]),
+            ("store_update", "Microsoft Store: приложения",
+             "UWP-приложения из Store (Paint, Почта, Web Experience Pack, "
+             "кодеки) обновляет не winget, а сам Store. Кнопка запускает "
+             "принудительную проверку — Store поставит всё новое в фоне "
+             "(плюс: это же делает «Обновить всё», если включено в "
+             "настройках). " + admin_note + ".",
+             [("🔄  Проверить Store",
+               lambda: self._run_check("store_update", 1.0))]),
             ("winget_src", "winget: источники пакетов",
              "Если обновления валятся с «ошибка winget или установщика» — "
              "сброс источников к заводским и обновление индексов "
@@ -2119,6 +2175,7 @@ class App(ctk.CTk):
             "drivers_install": lambda: diag_mod.driver_install(
                 is_admin=self.is_admin),
             "disks": diag_mod.disk_health,
+            "store_update": diag_mod.store_update_scan,
             "winget_src": diag_mod.repair_winget_sources,
             "dism": lambda: diag_mod.dism_checkhealth(self.is_admin),
             "sfc": diag_mod.sfc_verifyonly,
@@ -3198,6 +3255,10 @@ class App(ctk.CTk):
             menu.add_separator()
             menu.add_command(label="🗑  Удалить программу",
                              command=lambda: self._uninstall_by_pkg(pkg))
+        elif pkg.source == "msstore":
+            menu.add_separator()
+            menu.add_command(label="🗑  Удалить приложение Store",
+                             command=lambda: self._uninstall_store_pkg(pkg))
         menu.add_command(label="Копировать ID",
                          command=lambda: self._copy(pkg.pkg_id))
         try:
